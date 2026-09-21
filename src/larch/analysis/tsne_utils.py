@@ -197,7 +197,9 @@ def plot_tsne(
 
     ## Make the point sizes sensible
     npts = tsne_results.shape[0]
-    if npts > 100_000:
+    if npts > 200_000:
+        point_size = 0.2
+    elif npts > 100_000:
         point_size = 0.5
     elif npts > 25_000:
         point_size = 1.0
