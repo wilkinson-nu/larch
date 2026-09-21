@@ -11,7 +11,7 @@ from cuml.manifold import UMAP as cuML_UMAP
 def compute_tsne_skl(input_vect,
                      perp=30,
                      exag=6,
-                     lr=2000.0,
+                     lr='auto',
                      n_iter=2000,
                      metric='euclidean',
                      method='barnes_hut',
@@ -186,9 +186,7 @@ def plot_tsne(
         raise ValueError("tsne_results must have shape (N, 2)")
 
     if len(zvect) < len(tsne_results):
-        raise ValueError(
-            "zvect requires at least as many points as tsne_results"
-        )
+        raise ValueError("zvect requires at least as many points as tsne_results")
 
     zvect = zvect[:len(tsne_results)]
 
@@ -213,9 +211,7 @@ def plot_tsne(
         alpha_vect = np.asarray(alpha_vect, dtype=float)
 
         if len(alpha_vect) != npts:
-            raise ValueError(
-                "alpha_vect and tsne_results must have the same length"
-            )
+            raise ValueError("alpha_vect and tsne_results must have the same length")
 
         # Preserve the nonlinear alpha transformation from the original.
         alpha_vect = np.clip(alpha_vect, 0.0, 1.0) ** 3
@@ -257,18 +253,14 @@ def plot_tsne(
             discrete_min = int(np.min(z_integer[finite]))
         else:
             if not np.isclose(vmin, round(vmin)):
-                raise ValueError(
-                    "vmin must be integer-valued in discrete mode"
-                )
+                raise ValueError("vmin must be integer-valued in discrete mode")
             discrete_min = int(round(vmin))
 
         if vmax is None:
             discrete_max = int(np.max(z_integer[finite]))
         else:
             if not np.isclose(vmax, round(vmax)):
-                raise ValueError(
-                    "vmax must be integer-valued in discrete mode"
-                )
+                raise ValueError("vmax must be integer-valued in discrete mode")
             discrete_max = int(round(vmax))
 
         if discrete_min > discrete_max:
@@ -293,10 +285,7 @@ def plot_tsne(
         # Map discrete labels to consecutive color indices.
         color_indices = z_clipped - discrete_min
 
-        discrete_cmap = _make_discrete_cmap(
-            n_levels,
-            cmap=cmap,
-        )
+        discrete_cmap = _make_discrete_cmap(n_levels, cmap=cmap)
 
         discrete_norm = mcolors.BoundaryNorm(
             boundaries=np.arange(n_levels + 1) - 0.5,
@@ -313,11 +302,7 @@ def plot_tsne(
 
         if order_by_value:
             # Invalid values are drawn first; higher values are drawn last.
-            sorting_values = np.where(
-                finite,
-                z_clipped,
-                -np.inf,
-            )
+            sorting_values = np.where(finite, z_clipped, -np.inf)
             sort_order = np.argsort(sorting_values)
         else:
             sort_order = np.arange(npts)
@@ -375,20 +360,12 @@ def plot_tsne(
         # Unordered categories, e.g. interaction type
         # ================================================================
         if vmin is not None or vmax is not None:
-            raise ValueError(
-                "vmin and vmax are not meaningful in categorical mode"
-            )
+            raise ValueError("vmin and vmax are not meaningful in categorical mode")
 
-        unique_labels, color_indices = np.unique(
-            zvect,
-            return_inverse=True,
-        )
+        unique_labels, color_indices = np.unique(zvect, return_inverse=True)
         n_categories = len(unique_labels)
 
-        discrete_cmap = _make_discrete_cmap(
-            n_categories,
-            cmap=cmap,
-        )
+        discrete_cmap = _make_discrete_cmap(n_categories, cmap=cmap)
 
         discrete_norm = mcolors.BoundaryNorm(
             boundaries=np.arange(n_categories + 1) - 0.5,
@@ -416,10 +393,7 @@ def plot_tsne(
         )
 
         if add_colorbar:
-            scalar_mappable = plt.cm.ScalarMappable(
-                norm=discrete_norm,
-                cmap=discrete_cmap,
-            )
+            scalar_mappable = plt.cm.ScalarMappable(norm=discrete_norm, cmap=discrete_cmap)
             scalar_mappable.set_array([])
 
             cbar = fig.colorbar(
@@ -443,9 +417,7 @@ def plot_tsne(
         try:
             z_numeric = zvect.astype(float)
         except (TypeError, ValueError) as error:
-            raise ValueError(
-                "Continuous mode requires numerical values"
-            ) from error
+            raise ValueError("Continuous mode requires numerical values") from error
 
         finite = np.isfinite(z_numeric)
 
@@ -468,10 +440,7 @@ def plot_tsne(
                 raise ValueError("vmin must not be greater than vmax")
 
             if color_vmin == color_vmax:
-                color_vmax = color_vmin + max(
-                    abs(color_vmin) * 1e-6,
-                    1e-12,
-                )
+                color_vmax = color_vmin + max(abs(color_vmin) * 1e-6, 1e-12)
 
             norm = mcolors.Normalize(
                 vmin=color_vmin,
@@ -483,48 +452,26 @@ def plot_tsne(
             valid = finite & (z_numeric > 0)
 
             if not np.any(valid):
-                raise ValueError(
-                    "Log normalization requires positive values"
-                )
+                raise ValueError("Log normalization requires positive values")
 
-            color_vmin = (
-                np.min(z_numeric[valid])
-                if vmin is None else float(vmin)
-            )
-            color_vmax = (
-                np.max(z_numeric[valid])
-                if vmax is None else float(vmax)
-            )
+            color_vmin = (np.min(z_numeric[valid]) if vmin is None else float(vmin))
+            color_vmax = (np.max(z_numeric[valid]) if vmax is None else float(vmax))
 
             if color_vmin <= 0:
-                raise ValueError(
-                    "vmin must be positive with log normalization"
-                )
+                raise ValueError("vmin must be positive with log normalization")
 
             if color_vmax <= color_vmin:
-                raise ValueError(
-                    "vmax must be greater than vmin with "
-                    "log normalization"
-                )
+                raise ValueError("vmax must be greater than vmin with log normalization")
 
-            norm = mcolors.LogNorm(
-                vmin=color_vmin,
-                vmax=color_vmax,
-                clip=True,
-            )
+            norm = mcolors.LogNorm(vmin=color_vmin, vmax=color_vmax, clip=True)
 
         else:
-            raise ValueError(
-                "norm_type must be 'linear' or 'log'"
-            )
+            raise ValueError("norm_type must be 'linear' or 'log'")
 
         continuous_cmap = plt.get_cmap(cmap or "viridis").copy()
         continuous_cmap.set_bad("lightgray")
 
-        scalar_mappable = plt.cm.ScalarMappable(
-            norm=norm,
-            cmap=continuous_cmap,
-        )
+        scalar_mappable = plt.cm.ScalarMappable(norm=norm, cmap=continuous_cmap)
         scalar_mappable.set_array([])
 
         point_colors = scalar_mappable.to_rgba(z_numeric)
@@ -534,11 +481,7 @@ def plot_tsne(
             point_colors[:, 3] = alpha_vect
 
         if order_by_value:
-            sorting_values = np.where(
-                valid,
-                z_numeric,
-                -np.inf,
-            )
+            sorting_values = np.where(valid, z_numeric, -np.inf)
             sort_order = np.argsort(sorting_values)
         else:
             sort_order = np.arange(npts)
@@ -553,14 +496,8 @@ def plot_tsne(
         )
 
         if add_colorbar:
-            below_range = (
-                vmin is not None
-                and np.any(z_numeric[valid] < color_vmin)
-            )
-            above_range = (
-                vmax is not None
-                and np.any(z_numeric[valid] > color_vmax)
-            )
+            below_range = (vmin is not None and np.any(z_numeric[valid] < color_vmin))
+            above_range = (vmax is not None and np.any(z_numeric[valid] > color_vmax))
 
             if below_range and above_range:
                 extend = "both"
@@ -571,22 +508,11 @@ def plot_tsne(
             else:
                 extend = "neither"
 
-            cbar = fig.colorbar(
-                scalar_mappable,
-                ax=ax,
-                extend=extend,
-            )
-            cbar.set_label(
-                ztitle,
-                rotation=270,
-                labelpad=20,
-            )
+            cbar = fig.colorbar(scalar_mappable, ax=ax, extend=extend)
+            cbar.set_label(ztitle, rotation=270, labelpad=20)
 
     else:
-        raise ValueError(
-            "color_mode must be one of "
-            "'discrete', 'categorical', or 'continuous'"
-        )
+        raise ValueError("color_mode must be 'discrete', 'categorical', or 'continuous'")
 
     ax.set_xlabel("t-SNE #0")
     ax.set_ylabel("t-SNE #1")
@@ -601,361 +527,7 @@ def plot_tsne(
 
     return ax
 
-def plot_tsne_BAD(
-    tsne_results,
-    zvect,
-    alpha_vect=None,
-    ztitle="Cluster ID",
-    ax=None,
-    add_colorbar=True,
-    color_mode="categorical",   # "categorical" or "continuous"
-    cmap=None,
-    norm_type="linear",         # "linear" or "log"; continuous mode only
-    vmin=None,
-    vmax=None,
-    save_name=None,
-    order_by_value=False
-):
-    tsne_results = np.asarray(tsne_results)
-    zvect = np.asarray(zvect)
 
-    if tsne_results.shape[0] != len(zvect):
-        raise ValueError("tsne_results and zvect must have the same length")
-
-    if ax is None:
-        fig, ax = plt.subplots()
-    else:
-        fig = ax.figure
-
-    ## Keep track of whether values were clipped for the colorbar arrow.
-    values_above_max = False
-
-    ## Plot larger values last, making them less likely to be hidden.
-    if order_by_value:
-        if np.issubdtype(zvect.dtype, np.number):
-            sortable = np.where(np.isfinite(zvect), zvect, -np.inf)
-            sort_order = np.argsort(sortable)
-        else:
-            sort_order = np.argsort(zvect.astype(str))
-    else:
-        sort_order = np.arange(len(zvect))
-
-    ## Make the point sizes sensible
-    npts = tsne_results.shape[0]
-    if npts > 100_000:
-        point_size = 0.5
-    elif npts > 25_000:
-        point_size = 1.0
-    elif npts > 10_000:
-        point_size = 2.0
-    else:
-        point_size = 3.0
-
-    if alpha_vect is not None:
-        alpha_vect = np.asarray(alpha_vect, dtype=float)
-        if len(alpha_vect) != len(zvect):
-            raise ValueError("alpha_vect and zvect must have the same length")
-        alpha_vect = np.clip(alpha_vect, 0.0, 1.0) ** 3
-
-    if color_mode == "continuous":
-        # Continuous numerical coloring
-        try:
-            z_numeric = zvect.astype(float)
-        except (TypeError, ValueError):
-            raise ValueError(
-                "Continuous color mode requires a numerical zvect"
-            )
-
-        finite = np.isfinite(z_numeric)
-
-        if norm_type == "linear":
-            valid = finite
-
-            if not np.any(valid):
-                raise ValueError("zvect contains no finite values")
-
-            if vmin is None:
-                vmin = np.min(z_numeric[valid])
-            if vmax is None:
-                vmax = np.max(z_numeric[valid])
-
-            # Avoid a degenerate normalization if all values are identical.
-            if vmin == vmax:
-                vmax = vmin + max(abs(vmin) * 1e-6, 1e-12)
-
-            norm = mcolors.Normalize(vmin=vmin, vmax=vmax, clip=True)
-
-        elif norm_type == "log":
-            valid = finite & (z_numeric > 0)
-
-            if not np.any(valid):
-                raise ValueError(
-                    "Log normalization requires at least one positive value"
-                )
-
-            if vmin is None:
-                vmin = np.min(z_numeric[valid])
-            if vmax is None:
-                vmax = np.max(z_numeric[valid])
-
-            if vmin <= 0:
-                raise ValueError("vmin must be positive for log normalization")
-            if vmax <= vmin:
-                vmax = vmin * (1.0 + 1e-6)
-
-            norm = mcolors.LogNorm(vmin=vmin, vmax=vmax, clip=True)
-
-        else:
-            raise ValueError("norm_type must be 'linear' or 'log'")
-
-        cmap = plt.get_cmap(cmap or "viridis").copy()
-        cmap.set_bad("lightgray")
-
-        scalar_mappable = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
-        scalar_mappable.set_array([])
-
-        # Create RGBA colors explicitly so each point can have its own alpha.
-        point_colors = scalar_mappable.to_rgba(z_numeric)
-
-        # Display invalid/log-nonpositive values in gray.
-        point_colors[~valid] = mcolors.to_rgba("lightgray")
-
-        if alpha_vect is not None:
-            point_colors[:, 3] = alpha_vect
-
-        ax.scatter(
-            tsne_results[sort_order, 0],
-            tsne_results[sort_order, 1],
-            s=point_size,
-            c=point_colors[sort_order],
-            linewidths=0,
-            rasterized=npts > 50_000,
-        )
-
-        if add_colorbar:
-            cbar = fig.colorbar(
-                scalar_mappable,
-                ax=ax,
-                extend="max" if values_above_max else "neither",
-            )
-            cbar.set_label(ztitle, rotation=270, labelpad=20)
-
-    elif color_mode == "categorical":
-
-        unique_labels, zvect_idx = np.unique(
-            zvect,
-            return_inverse=True,
-        )
-        n_clusters = len(unique_labels)
-
-        if cmap is None:
-            all_colors = (
-                plt.cm.tab20.colors
-                + plt.cm.tab20b.colors
-                + plt.cm.tab20c.colors
-                + plt.cm.tab10.colors
-            )
-
-            if n_clusters > len(all_colors):
-                n_extra = n_clusters - len(all_colors)
-                denominator = max(1, n_extra - 1)
-                all_colors += tuple(
-                    plt.cm.nipy_spectral(i / denominator)
-                    for i in range(n_extra)
-                )
-
-            discrete_cmap = mcolors.ListedColormap(
-                all_colors[:n_clusters]
-            )
-        else:
-            source_cmap = plt.get_cmap(cmap)
-            discrete_cmap = mcolors.ListedColormap(
-                source_cmap(np.linspace(0, 1, n_clusters))
-            )
-
-        discrete_norm = mcolors.BoundaryNorm(
-            np.arange(n_clusters + 1),
-            ncolors=n_clusters,
-        )
-
-        point_colors = discrete_cmap(zvect_idx)
-
-        if alpha_vect is not None:
-            point_colors[:, 3] = alpha_vect
-
-        ax.scatter(
-            tsne_results[sort_order, 0],
-            tsne_results[sort_order, 1],
-            s=point_size,
-            c=point_colors[sort_order],
-            linewidths=0,
-            rasterized=npts > 50_000,
-        )
-
-        if add_colorbar:
-            scalar_mappable = plt.cm.ScalarMappable(
-                norm=discrete_norm,
-                cmap=discrete_cmap,
-            )
-            scalar_mappable.set_array([])
-
-            cbar = fig.colorbar(scalar_mappable, ax=ax)
-            cbar.set_label(ztitle, rotation=270, labelpad=20)
-            cbar.set_ticks(np.arange(n_clusters) + 0.5)
-
-            # Do not coerce labels to integers.
-            tick_labels = [
-                f"{label:g}" if isinstance(label, (float, np.floating))
-                else str(label)
-                for label in unique_labels
-            ]
-            cbar.set_ticklabels(tick_labels)
-
-    else:
-        raise ValueError(
-            "color_mode must be 'categorical' or 'continuous'"
-        )
-
-    ax.set_xlabel("t-SNE #0")
-    ax.set_ylabel("t-SNE #1")
-    ax.grid(False)
-
-    if save_name:
-        fig.savefig(save_name, dpi=200, bbox_inches="tight")
-
-    return ax
-
-
-def plot_tsne_OLD(tsne_results,
-              zvect=None,
-              alpha_vect=None,
-              ztitle="Cluster ID",
-              ax=None,
-              add_colorbar=True,
-              linear_colorbar=False,
-              save_name=None,
-              order_by_value=False,
-              max_z=None):
-
-    if ax is None:
-        fig, ax = plt.subplots()
-    else:
-        fig = ax.figure
-
-    ## Define an order to sort in if we want to emphasize nonzero values
-    if order_by_value:
-        sort_order = np.argsort(zvect)
-    else:
-        sort_order = np.arange(len(zvect))
-
-    ## Optionally clip the range
-    if max_z is not None:
-        zvect = np.clip(zvect, None, max_z)
-        
-    unique_labels = np.unique(zvect)
-    n_clusters = len(unique_labels)
-    label_to_idx = {label: idx for idx, label in enumerate(unique_labels)}
-    
-    if linear_colorbar:
-        all_colors = tuple(
-            plt.cm.nipy_spectral(i / n_clusters) for i in range(n_clusters)
-        )
-    else:
-        all_colors = (
-            plt.cm.tab20.colors +
-            plt.cm.tab20b.colors +
-            plt.cm.tab20c.colors +
-            plt.cm.tab10.colors
-        )
-
-        if n_clusters > 70:
-            n_extra = n_clusters - 70
-            all_colors += tuple(
-                plt.cm.nipy_spectral(i / n_extra) for i in range(n_extra)
-            )
-
-    cmap = mcolors.ListedColormap(all_colors[:n_clusters])
-    norm_cmap = mcolors.BoundaryNorm(
-        boundaries=np.arange(n_clusters + 1),
-        ncolors=n_clusters
-    )
-
-    zvect_idx = np.array([label_to_idx[z] for z in zvect])
-
-    if alpha_vect is not None:
-        alpha_vect = alpha_vect**3
-        rgb_colors = np.array(
-            [cmap(i % n_clusters)[:3] for i in zvect_idx]
-        )
-        rgb_colors = np.concatenate(
-            [rgb_colors, alpha_vect[:, None]],
-            axis=1
-        )
-    else:
-        rgb_colors = np.array([cmap(i % n_clusters) for i in zvect_idx])
-
-    npts = tsne_results.shape[0]
-    s = 0.1
-    if npts <= 25000: s = 0.5
-    if npts <= 10000: s = 2
-    if npts > 100000: s = 0.05
-    
-    ax.scatter(tsne_results[sort_order, 0],
-               tsne_results[sort_order, 1],
-               s=s,
-               c=rgb_colors[sort_order])
-
-    ax.set_xlabel("t-SNE #0")
-    ax.set_ylabel("t-SNE #1")
-    ax.grid(False)
-
-    if add_colorbar:
-        cbar = fig.colorbar(
-            plt.cm.ScalarMappable(norm=norm_cmap, cmap=cmap),
-            ax=ax
-        )
-        cbar.set_label(ztitle, rotation=270, labelpad=20)
-        tick_labels = [str(int(l)) for l in unique_labels]
-        if max_z is not None and np.any(zvect == max_z):
-            tick_labels[-1] = f"{int(max_z)}+"
-        cbar.set_ticks(np.arange(n_clusters) + 0.5)
-        cbar.set_ticklabels(tick_labels)
-        
-    if save_name:
-        plt.savefig(save_name,
-                    dpi=200,
-                    bbox_inches='tight')
-    return ax
-
-
-def plot_summary_tsne_block_OLD(tsne_results, processed, apply_alpha_vect=None, save_name=None):
-    fig, axes = plt.subplots(2, 3, figsize=(20, 10))
-
-    ntsne = len(tsne_results)
-    alpha_vect = None
-    if apply_alpha_vect: alpha_vect = processed['clust_max'][:ntsne]  
-
-    plot_tsne(tsne_results, processed['labels']['cc_category'][:ntsne], color_mode="categorical",
-              ax=axes[0][0], alpha_vect=alpha_vect, ztitle="CC category")
-    plot_tsne(tsne_results, processed['labels']['topology'][:ntsne], color_mode="categorical",
-              ax=axes[0][1], alpha_vect=alpha_vect, ztitle="Topology")
-    plot_tsne(tsne_results, processed['labels']['mode'][:ntsne], color_mode="categorical",
-              ax=axes[0][2], alpha_vect=alpha_vect, ztitle="Mode")
-
-    nhits = processed['nhits'][:ntsne] //100.
-    plot_tsne(tsne_results, nhits, color_mode="continuous",
-              ax=axes[1][0], alpha_vect=alpha_vect, ztitle="N. hits /100", norm_type="linear", vmin=0, vmax=10)
-    plot_tsne(tsne_results, processed['labels']['enu'][:ntsne], color_mode="continuous",
-              ax=axes[1][1], alpha_vect=alpha_vect, ztitle=r"$E_{\nu}$ (GeV)", norm_type="linear", vmin=2, vmax=12)
-    plot_tsne(tsne_results, processed['labels']['q0'][:ntsne], color_mode="continuous",
-              ax=axes[1][2], alpha_vect=alpha_vect, ztitle=r"$q_{0}$ (GeV)", norm_type="linear", vmin=0, vmax=3)
-
-    plt.tight_layout()
-    if save_name: plt.savefig(save_name, dpi=200, bbox_inches='tight')
-    plt.show()
-    plt.close()
-
-    
 def plot_summary_tsne_block(tsne_results, processed, save_name=None):
     fig, axes = plt.subplots(3, 3, figsize=(20, 15))
 
@@ -1023,38 +595,50 @@ def plot_particle_tsne_block(tsne_results, processed_labels, save_name=None):
 def compute_tsne_cuml(input_vect, 
                       perp=30, 
                       exag=6, 
-                      lr=2000.0, 
+                      lr=None, 
                       n_iter=5000,
                       verbose=True,
+                      method='barnes_hut',
                       metric="euclidean"):
     
     input_vect = cp.asarray(input_vect, dtype=cp.float32)                                       
     
-    print("Running cuML t-SNE with:",
-          "perplexity =", perp,
-          "early exaggeration =", exag)
-    
     n_neighbors = 3*perp
     if n_neighbors > 1024: n_neighbors = 1024
+
+    ## LR guesstimate from Belkina et al (2019)
+    if lr is None: lr = max(float(input_vect.shape[0]) / float(exag), 200)
+
+    print("Running cuML t-SNE with:",
+          "perplexity =", perp,
+	  "early exaggeration =", exag,
+          "lr =", lr,
+          "method =", method)
     
     tsne = cuML_TSNE(n_components=2,
                      perplexity=perp,
                      n_iter=n_iter, 
                      early_exaggeration=exag,
+                     exaggeration_iter=750,
                      learning_rate=lr,
                      learning_rate_method=None,
                      n_neighbors=n_neighbors,
                      metric=metric,
-                     method='barnes_hut',
+                     method=method,
                      init='pca',
                      verbose=verbose)
     
-    tsne_results = tsne.fit_transform(input_vect)
-    scaler = cuMLScaler()
-    tsne_results = scaler.fit_transform(tsne_results)  # tsne_results still on GPU
-    tsne_results = cp.asnumpy(tsne_results)
-    print("Found:", tsne_results.shape[0], "points")
-    return tsne_results
+    emb = tsne.fit_transform(input_vect)
+    emb = cp.asarray(emb)
+
+    ## Normalize
+    emb = emb - emb.mean(axis=0, keepdims=True)
+    scale = float(emb.std())
+    if scale > 0: emb = emb * (1.0 / scale)    
+    emb = cp.asnumpy(emb)
+
+    print("Found:", emb.shape[0], "points")
+    return emb
 
 def run_umap_cuml(input_vect=None,
                   zvect=None,

@@ -11,7 +11,7 @@ from larch.datasets.augmentations_2d import FirstRegionCrop
 
 def get_dataset(input_dir, nevents, nom_transform=False, return_metadata=False):
 
-    print("Loading", nevents," events from", input_dir)
+    print("Loading", nevents, "events from", input_dir)
 
     ## This is a relic as this was initially done for the FSD dataset
     if nom_transform == False:

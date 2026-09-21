@@ -1,11 +1,13 @@
 import torch
 import argparse
+import os
 
 from larch.models.resnet_encoder import get_encoder
 from larch.models.projection_head import get_projhead
 from larch.models.clustering_head import get_clusthead
 
 def load_checkpoint(state_file_name):
+    state_file_name = os.path.expandvars(state_file_name)
     checkpoint = torch.load(state_file_name, map_location='cpu')
     
     # Reconstruct args Namespace
@@ -32,6 +34,7 @@ def get_models_from_checkpoint(state_file_name):
             heads["clust"] = get_clusthead(encoder.get_nchan(), args)
             heads["clust"] .load_state_dict(checkpoint['clust_head_state_dict']) 
 
+    print("Loaded models from:", state_file_name)
     return encoder, heads, args
 
 

@@ -342,7 +342,23 @@ def get_transform(image_size=256, aug_type=None, aug_prob=1, aug_val=None):
             RandomCenterCrop([y_orig,x_orig], [y_max,x_max], [256, 192], 10),
 	])
 
-
+    if aug_type == "v1m":
+        return transforms.Compose([
+            aug.RandomVerticalFlip(y_max=y_orig, p=0.5),
+            aug.GridJitter(2, 0.1),
+            aug.JitterCoords(0.1),
+            RandomCentralRotation2D(40, img_size=[y_orig, x_orig], center=[256,128], jitter=10, p=aug_prob),
+            RandomCentralShear2D(0.2, 0.2, img_size=[y_orig, x_orig], center=[256,128], jitter=10, p=aug_prob),
+            RandomCentralStretch2D(0.2, 0.2, img_size=[y_orig, x_orig], center=[256,128], jitter=10, p=aug_prob),
+            aug.RandomGridDistortion2D(100, 3, 2, 10, p=aug_prob),
+            aug.RandomScaleCharge(0.05, p=aug_prob),
+            aug.RandomJitterCharge(0.05, p=aug_prob),
+            LogAlphaChargeRandom(4,6),
+            aug.BilinearSplatReduce(0.25, 0.4),
+            aug.RandomDropout(0.2, p=aug_prob),
+            RandomCenterCrop([y_orig,x_orig], [y_max,x_max], [256, 192], 10),
+        ])
+    
     if aug_type == "v0m":
         return transforms.Compose([
             aug.RandomVerticalFlip(y_max=y_orig, p=0.5),
