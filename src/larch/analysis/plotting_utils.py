@@ -150,7 +150,16 @@ def plot_metric_by_confidence(xvar, confidence, nbinsx=None, x_min=None, x_max=N
 
     
 # Make a histogram broken down into all possible labels, for arbitrary x variables
-def plot_metric_by_label(xvar, labels, nbinsx=None, x_min=None, x_max=None, xtitle="xvar", ytitle="N. images", normalize=False, label_enum=Label):
+def plot_metric_by_label(xvar,
+                         labels,
+                         nbinsx=None,
+                         x_min=None,
+                         x_max=None,
+                         xtitle="xvar",
+                         ytitle="N. images",
+                         normalize=False,
+                         label_enum=Label,
+                         logy=False):
 
     ## Deal with binning myself for some reason...
     bins, is_int = parse_binning(xvar, nbinsx, x_min, x_max)
@@ -205,7 +214,7 @@ def plot_metric_by_label(xvar, labels, nbinsx=None, x_min=None, x_max=None, xtit
         frameon=False
     )
     plt.tight_layout()  # prevents clipping
-    # plt.grid(True)
+    if logy: plt.yscale("log")
     plt.show()
     plt.close()
 
