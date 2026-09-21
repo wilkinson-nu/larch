@@ -4,7 +4,7 @@ REPO=${REPO:-$HOME/larch}
 source "$REPO/submit/common.sh"
 
 ## High level slurm control
-QOS=premium
+QOS=regular
 NODES=2
 WALLTIME=480
 IMAGE=docker:wilkinsonnu/ml_tools:ME
