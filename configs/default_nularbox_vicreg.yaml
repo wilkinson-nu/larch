@@ -30,7 +30,7 @@ aug_val: 0.0
 ## ---- encoder architecture ----
 enc_act: relu
 enc_arch: ResNet50v1
-enc_arch_pool: avg
+enc_arch_pool: max
 enc_res_pool: 1
 enc_stem_norm: 1
 enc_init_stem_stride: 2
