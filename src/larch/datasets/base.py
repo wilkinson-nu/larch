@@ -86,7 +86,7 @@ class paired_2d_dataset_ME(Dataset):
             if out_feats.size > 0:
                 return out_coords, out_feats
         ## If no valid augmentation has been found, bail
-        raise RuntimeError("Augmentation failed on initial image with feats.size =", feats.size)
+        raise RuntimeError(f"Augmentation failed on initial image with feats.size = {feats.size}")
     
     def __len__(self):
         return self.length
@@ -290,7 +290,7 @@ class single_2d_dataset_ME(Dataset):
             if out_feats.size > 0:
                 return out_coords, out_feats
         ## If no valid augmentation has been found, bail
-        raise RuntimeError("Augmentation failed on initial image with feats.size =", feats.size)
+        raise RuntimeError(f"Augmentation failed on initial image with feats.size = {feats.size}")
         
     def __len__(self):
         return self.length
