@@ -1,4 +1,5 @@
 import torch
+import time
 import MinkowskiEngine as ME
 import torch.distributed as dist
 import torch.nn.functional as F

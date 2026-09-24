@@ -430,16 +430,16 @@ def run_training(rank, local_rank, world_size, args):
                                                  query_loader,
                                                  device,
                                                  targets=MONITOR_CONFIG,
-                                                 label=groups=MONITOR_LABEL_GROUPS,
+                                                 label_groups=MONITOR_LABEL_GROUPS,
                                                  rank=rank,
                                                  run_knn=run_knn,
                                                  run_linear=run_linear,
                                                  knn_k=args.knn_k,
                                                  knn_pca=args.knn_k,
-                                                 linear_epochss=args.linear_epochs,
+                                                 linear_epochs=args.linear_epochs,
                                                  linear_batch_size=args.linear_batch_size,
                                                  linear_lr=args.linear_lr,
-                                                 seed=seed)
+                                                 seed=args.seed)
 
         ## Reporting, but only for rank 0
         if rank==0:
