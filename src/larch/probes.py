@@ -4,6 +4,9 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from larch.classification import ClassificationMetrics, SupervisedHead, supervised_loss
 from larch.distributed import print0
+from larch.training.logging import log_scalar
+
+KNN_METRICS = ("cosine", "euclidean")
 
 @torch.no_grad()
 def extract_features(encoder,
@@ -329,3 +332,85 @@ def fit_linear_probe(
 
     del probe, optimizer
     return results
+
+def run_probes(encoder,
+               bank_loader,
+               query_loader,
+               device,
+               targets,
+               label_groups,
+               *,
+               rank,
+               run_knn,
+               run_linear,
+               knn_k,
+               knn_pca,
+               linear_epochs,
+               linear_batch_size,
+               linear_lr,
+               seed,
+               knn_metrics=KNN_METRICS):
+
+    if not (run_knn or run_linear):
+        return None, None
+
+    tstart = time.time()
+    bank_f, bank_l = extract_features(encoder, bank_loader, device, targets.keys())
+    qry_f, qry_l = extract_features(encoder, query_loader, device, targets.keys())
+
+    knn_results = None
+    linear_results = None
+
+    if rank == 0 and run_knn:
+        knn_results = {}
+        for metric in knn_metrics:
+            knn_results[metric] = {}
+            for group in label_groups:
+                print0(f"Running {metric} kNN for {group}")
+                knn_results[metric][group] = evaluate_knn(
+                    bank_f, bank_l[group],
+                    qry_f, qry_l[group],
+                    classifier_config=targets,
+                    device=device,
+                    k=knn_k,
+                    metric=metric,
+                    pca_dims=knn_pca,
+                )
+
+    if rank == 0 and run_linear:
+        linear_results = {}
+        for group in label_groups:
+            print0(f"Running linear probe for {group}")
+            linear_results[group] = fit_linear_probe(
+                bank_f, bank_l[group],
+                qry_f, qry_l[group],
+                classifier_config=targets,
+                device=device,
+                epochs=linear_epochs,
+                batch_size=linear_batch_size,
+                lr=linear_lr,
+                seed=seed,
+            )
+
+    dist.barrier()
+    print0(f"Monitoring time taken: {time.time() - tstart:.2f}")
+    return knn_results, linear_results
+
+
+def log_probe_results(writer, metrics, knn_results, linear_results, iteration):
+    if knn_results is not None:
+        for dist_metric, group_results in knn_results.items():
+            for group, target_results in group_results.items():
+                for part, result in target_results.items():
+                    for name, value in result.items():
+                        log_scalar(writer, metrics,
+                                   f"knn_{group}/{dist_metric}/{part}_{name}",
+                                   value, iteration)
+
+    if linear_results is not None:
+        for group, target_results in linear_results.items():
+            for part, result in target_results.items():
+                for name, value in result.items():
+                    log_scalar(writer, metrics,
+                               f"linear_{group}/{part}_{name}",
+                               value, iteration)

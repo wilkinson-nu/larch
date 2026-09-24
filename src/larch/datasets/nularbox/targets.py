@@ -1,5 +1,7 @@
 ## Currently there's only a single target for the probes/supervised training. But could add more and include a dictionary so it can be selected with an argument...
 
+LABEL_GROUPS = ("particle_truth", "particle_visible")
+
 MULTIPLICITY_TARGETS = {
     'nproton':   {'weight': 1.0, 'cap': 3},
     'npipm':     {'weight': 1.0, 'cap': 2},

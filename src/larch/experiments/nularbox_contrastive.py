@@ -42,8 +42,8 @@ from torch.utils.tensorboard import SummaryWriter
 from larch.datasets.nularbox.augmentations_2d import get_transform
 
 ## Supervised for kNN monitoring
-from larch.datasets.nularbox.targets import MULTIPLICITY_TARGETS, label_clamp
-from larch.probes import extract_features, evaluate_knn, fit_linear_probe
+from larch.datasets.nularbox.targets import MULTIPLICITY_TARGETS, LABEL_GROUPS, label_clamp
+from larch.probes import run_probes, log_probe_results
 
 ## Utilities for multi-rank training
 from larch.distributed import setup_distributed_runtime, print0
@@ -145,11 +145,8 @@ def run_training(rank, local_rank, world_size, args):
     ## Setup the monitoring dataset
     monitor_transform = get_transform(args.out_image_size, "no_aug")
 
-    ## Which label groups to run monitoring probes on
-    MONITOR_LABEL_GROUPS = ("particle_truth", "particle_visible")
-
-    ## Run kNN for cosine and euclidean
-    KNN_METRICS = ("cosine", "euclidean")
+    ## Use the default label groups to run monitoring probes on
+    MONITOR_LABEL_GROUPS = LABEL_GROUPS
 
     ## Apply maxima to the N. particle groups of interest
     MONITOR_CONFIG = MULTIPLICITY_TARGETS
@@ -426,59 +423,23 @@ def run_training(rank, local_rank, world_size, args):
         ## kNN and linear probe monitoring
         run_knn = (args.knn_every > 0 and iteration % args.knn_every == 0)
         run_linear = (args.linear_every > 0 and iteration % args.linear_every == 0)
-        run_feature_monitoring = run_knn or run_linear
 
-        knn_results = None
-        linear_results = None
-        
-        if run_feature_monitoring:
-            monitor_tstart = time.time()
-            bank_f, bank_l = extract_features(encoder, bank_loader,  device, MONITOR_CONFIG.keys())
-            qry_f,  qry_l  = extract_features(encoder, query_loader, device, MONITOR_CONFIG.keys())
-
-            if rank == 0 and run_knn:
-                knn_results = {}
-                
-                for metric in KNN_METRICS:
-                    knn_results[metric] = {}
-
-                    for label_group in MONITOR_LABEL_GROUPS:
-                        print0(f"Running {metric} kNN for {label_group}")
-
-                        knn_results[metric][label_group] = evaluate_knn(
-                            bank_f,
-                            bank_l[label_group],
-                            qry_f,
-                            qry_l[label_group],
-                            classifier_config=MONITOR_CONFIG,
-                            device=device,
-                            k=args.knn_k,
-                            metric=metric,
-                            pca_dims=args.knn_pca,
-                        )
-
-            if rank == 0 and run_linear:
-                linear_results = {}
-
-                for label_group in MONITOR_LABEL_GROUPS:
-                    print0(f"Running linear probe for {label_group}")
-
-                    linear_results[label_group] = fit_linear_probe(
-                        bank_f,
-                        bank_l[label_group],
-                        qry_f,
-                        qry_l[label_group],
-                        classifier_config=MONITOR_CONFIG,
-                        device=device,
-                        epochs=args.linear_epochs,
-                        batch_size=args.linear_batch_size,
-                        lr=args.linear_lr,
-                        seed=args.seed,
-                    )
-            
-            ## Stop all ranks from moving on before the linear probe is finished
-            dist.barrier()
-            print0(f"Monitoring time taken: {(time.time()-monitor_tstart):.2f}")
+        ## Run probes as desired
+        knn_results, linear_results = run_probes(encoder,
+                                                 bank_loader,
+                                                 query_loader,
+                                                 device,
+                                                 targets=MONITOR_CONFIG,
+                                                 label=groups=MONITOR_LABEL_GROUPS,
+                                                 rank=rank,
+                                                 run_knn=run_knn,
+                                                 run_linear=run_linear,
+                                                 knn_k=args.knn_k,
+                                                 knn_pca=args.knn_k,
+                                                 linear_epochss=args.linear_epochs,
+                                                 linear_batch_size=args.linear_batch_size,
+                                                 linear_lr=args.linear_lr,
+                                                 seed=seed)
 
         ## Reporting, but only for rank 0
         if rank==0:
@@ -533,18 +494,8 @@ def run_training(rank, local_rank, world_size, args):
                         iteration,
                     )
 
-            if knn_results is not None:
-                for dist_metric, group_results in knn_results.items():
-                    for label_group, target_results in group_results.items():
-                        for part, result in target_results.items():
-                            for metric, value in result.items():
-                                log_scalar(writer, metrics, f"knn_{label_group}/{dist_metric}/{part}_{metric}", value, iteration)
-                    
-            if linear_results is not None:
-                for label_group, target_results in linear_results.items():
-                    for part, result in target_results.items():
-                        for metric, value in result.items():
-                            log_scalar(writer, metrics, f"linear_{label_group}/{part}_{metric}", value, iteration)                            
+            ## Logs all of the kNN and linear probe results
+            log_probe_results(writer, metrics, knn_results, linear_results, iteration)
                     
             if scheduler: 
                 log_scalar(writer, metrics, 'train/lr', scheduler.get_last_lr()[0], iteration)
