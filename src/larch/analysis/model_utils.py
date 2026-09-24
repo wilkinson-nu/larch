@@ -1,13 +1,24 @@
 import torch
 import argparse
 import os
+import glob
 
 from larch.models.resnet_encoder import get_encoder
 from larch.models.projection_head import get_projhead
 from larch.models.clustering_head import get_clusthead
 
+def resolve_path(pattern):
+    pattern = os.path.expanduser(os.path.expandvars(pattern))
+    if any(c in pattern for c in "*?["):
+        matches = sorted(glob.glob(pattern))
+        if not matches:
+            raise FileNotFoundError(f"no match for {pattern!r}")
+        if len(matches) > 1:
+            raise ValueError(f"ambiguous pattern {pattern!r}: {matches}")
+        return matches[0]
+    return pattern
+
 def load_checkpoint(state_file_name):
-    state_file_name = os.path.expandvars(state_file_name)
     checkpoint = torch.load(state_file_name, map_location='cpu')
     
     # Reconstruct args Namespace
@@ -16,6 +27,9 @@ def load_checkpoint(state_file_name):
 
 def get_models_from_checkpoint(state_file_name):
 
+    ## Expand paths (but fail on any conflicts)
+    state_file_name = resolve_path(state_file_name)
+    
     checkpoint, args = load_checkpoint(state_file_name)
 
     ## Get the models
