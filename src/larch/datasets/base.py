@@ -279,10 +279,14 @@ class single_2d_dataset_ME(Dataset):
             self._offsets.pop(old_index, None)
 
         return handle
-    
+
     def apply_aug_with_retry(self, coords, feats, max_retries=100):
+
+        if self.transform is None:
+            return coords, feats
+        
         for _ in range(max_retries):
-            out_coords, out_feats = self.transform(coords, feats)
+            out_coords, out_feats = self.transform, coords, feats)
             if out_feats.size > 0:
                 return out_coords, out_feats
         ## If no valid augmentation has been found, bail
