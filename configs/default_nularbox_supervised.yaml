@@ -1,0 +1,59 @@
+## Required arguments per run are not given here
+
+## ---- basic job setup ----
+num_workers: 8
+seed: 12345
+pretrained: null
+state_file: state.pth
+log: log
+
+## ---- training dynamics ----
+lr: 0.1
+batch_size: 1024
+optimizer: lars
+scheduler: lars
+lars_trust_coeff: 0.001
+lars_momentum: 0.9
+dropout: 0.0
+weight_decay: 1.0e-6
+weight_decay_final: -1.0   # -1 -> no WD schedule
+weight_decay_head: 1
+norm_encoder: 0
+non_lars_lr_scale: 0.03
+
+## ---- Supervised head specific ----
+sup_label_group: particle_truth
+
+## ---- image size and augmentations ----
+out_image_size: 256
+aug_type: v1
+aug_prob: 1.0
+aug_val: 0.0
+
+## ---- encoder architecture ----
+enc_act: relu
+enc_arch: ResNet50v1
+enc_arch_pool: max
+enc_res_pool: 1
+enc_stem_norm: 1
+enc_init_stem_stride: 2
+enc_final_stem_stride: 2
+enc_stem_pool: "none"
+enc_stem_deep: 1
+enc_layer1_norm: 1
+enc_final_linear: -1       # -1 -> no extra linear layer
+enc_stem_channels: 64
+
+## ---- kNN and linear probe monitoring ----
+monitor_nbank: 100000
+monitor_nquery: 100000
+knn_every: 2
+knn_k: 31
+knn_pca: 256
+linear_every: 2
+linear_epochs: 20
+linear_batch_size: 8192
+linear_lr: 0.01
+
+## ---- profiling ----
+run_profiler: 0
