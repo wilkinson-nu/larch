@@ -156,7 +156,6 @@ def run_training(rank, local_rank, world_size, args):
 
     ## So we don't constantly ask args
     nepoch = args.nepoch
-    clip_gradients = bool(args.clip_gradients)
     norm_encoder = bool(args.norm_encoder)
     weight_decay = args.weight_decay
     weight_decay_final = args.weight_decay_final
@@ -278,10 +277,6 @@ def run_training(rank, local_rank, world_size, args):
             optimizer.zero_grad(set_to_none=True)
             sup_loss .backward()
             
-            if clip_gradients:
-                torch.nn.utils.clip_grad_norm_(encoder.parameters(), max_norm=1.0)
-                for h in heads.values(): torch.nn.utils.clip_grad_norm_(h.parameters(), max_norm=1.0)
-
             ## Update optimizer and scheduler
             optimizer.step()
             if scheduler: scheduler.step()
@@ -525,7 +520,6 @@ def build_parser():
     parser.add_argument('--weight_decay', type=float)
     parser.add_argument('--weight_decay_final', type=float)
     parser.add_argument('--weight_decay_head', type=int, choices=[0,1])
-    parser.add_argument('--clip_gradients', type=int, choices=[0,1])
     parser.add_argument('--norm_encoder', type=int, choices=[0,1])
     parser.add_argument('--non_lars_lr_scale', type=float)
 
