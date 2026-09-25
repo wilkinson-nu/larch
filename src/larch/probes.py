@@ -132,13 +132,12 @@ def knn_neighbors(query,
 
 
 @torch.no_grad()
-def knn_votes_from_neighbors(
-    indices,
-    bank_labels,
-    n_classes,
-):
-    neighbor_labels = bank_labels[indices]
+def knn_votes_from_neighbors(indices,
+                             bank_labels,
+                             n_classes):
 
+    neighbor_labels = bank_labels[indices]
+    
     one_hot = F.one_hot(neighbor_labels,
                         num_classes=n_classes)
 
@@ -194,30 +193,29 @@ def evaluate_knn(bank_features,
     return metrics.compute()
 
 
-def fit_linear_probe(
-    bank_features,
-    bank_labels,
-    query_features,
-    query_labels,
-    *,
-    classifier_config,
-    device,
-    epochs=20,
-    batch_size=1024,
-    lr=1e-2,
-    seed=12345,
-):
-    # Keep the extracted feature dataset on CPU.
-    bank_features = bank_features.detach().float().cpu()
-    query_features = query_features.detach().float().cpu()
+def fit_linear_probe(bank_features,
+                     bank_labels,
+                     query_features,
+                     query_labels,
+                     *,
+                     classifier_config,
+                     device,
+                     epochs=20,
+                     batch_size=1024,
+                     lr=1e-2,
+                     seed=12345):
+    
+    # Move everything to the GPU for speed... imposes an implicit limit on the bank and query size
+    bank_features = bank_features.detach().float().to(device)
+    query_features = query_features.detach().float().to(device)
 
     bank_labels = {
-        name: labels.detach().long().cpu()
+        name: labels.detach().long().to(device)
         for name, labels in bank_labels.items()
         if name in classifier_config
     }
     query_labels = {
-        name: labels.detach().long().cpu()
+        name: labels.detach().long().to(device)
         for name, labels in query_labels.items()
         if name in classifier_config
     }
@@ -247,16 +245,10 @@ def fit_linear_probe(
     with torch.random.fork_rng(devices=cuda_devices):
         torch.manual_seed(seed)
 
-        probe = SupervisedHead(
-            encoder_dim=bank_features.shape[1],
-            classifier_config=classifier_config,
-        ).to(device)
+        probe = SupervisedHead(encoder_dim=bank_features.shape[1],
+                               classifier_config=classifier_config).to(device)
 
-        optimizer = torch.optim.AdamW(
-            probe.parameters(),
-            lr=lr,
-            weight_decay=0.0,
-        )
+        optimizer = torch.optim.AdamW(probe.parameters(), lr=lr, weight_decay=0.0)
 
         generator = torch.Generator()
         generator.manual_seed(seed)
@@ -271,20 +263,13 @@ def fit_linear_probe(
             permutation = torch.randperm(
                 bank_features.shape[0],
                 generator=generator,
-            )
+            ).to(device)
 
-            for start in range(
-                0,
-                bank_features.shape[0],
-                batch_size,
-            ):
+            for start in range(0, bank_features.shape[0], batch_size):
                 indices = permutation[start:start + batch_size]
 
-                features = bank_features[indices].to(device, non_blocking=True)
-                labels = {
-                    name: values[indices].to(device, non_blocking=True)
-                    for name, values in bank_labels.items()
-                }
+                features = bank_features[indices]
+                labels = {name: values[indices] for name, values in bank_labels.items()}
 
                 outputs = probe(features)
 
@@ -305,24 +290,14 @@ def fit_linear_probe(
         # Evaluate on the query split.
         probe.eval()
 
-        probe_metrics = ClassificationMetrics(
-            classifier_config,
-            device=device,
-        )
+        probe_metrics = ClassificationMetrics(classifier_config, device=device)
 
         with torch.no_grad():
-            for start in range(
-                0,
-                query_features.shape[0],
-                batch_size,
-            ):
+            for start in range(0, query_features.shape[0], batch_size):
                 end = start + batch_size
 
-                features = query_features[start:end].to(device, non_blocking=True)
-                labels = {
-                    name: values[start:end].to(device, non_blocking=True)
-                    for name, values in query_labels.items()
-                }
+                features = query_features[start:end]
+                labels = {name: values[start:end] for name, values in query_labels.items()}
 
                 outputs = probe(features)
                 probe_metrics.update(outputs, labels, outputs_are_logits=True)
@@ -331,7 +306,7 @@ def fit_linear_probe(
         # gathered bank and query features.
         results = probe_metrics.compute()
 
-    del probe, optimizer
+    del probe, optimizer, bank_features, query_labels
     return results
 
 def run_probes(encoder,
