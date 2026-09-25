@@ -286,7 +286,7 @@ class single_2d_dataset_ME(Dataset):
             return coords, feats
         
         for _ in range(max_retries):
-            out_coords, out_feats = self.transform, coords, feats)
+            out_coords, out_feats = self.transform(coords, feats)
             if out_feats.size > 0:
                 return out_coords, out_feats
         ## If no valid augmentation has been found, bail
