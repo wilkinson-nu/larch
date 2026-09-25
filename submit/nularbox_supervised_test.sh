@@ -20,7 +20,7 @@ STATE_FILE=state_${JOBNAME}.pth
 CONFIG=$RUN_DIR/configs/default_nularbox_supervised.yaml
 
 ## Run specific arguments
-NEVENTS=2000000
+NEVENTS=200000
 NEPOCH=50
 
 ## Do the business
