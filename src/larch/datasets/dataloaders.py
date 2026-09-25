@@ -16,19 +16,24 @@ def worker_init_fn(worker_id):
     np.random.seed(seed)
     random.seed(seed)
 
-def make_distributed_dataloader(
-    dataset,
-    *,
-    rank,
-    world_size,
-    batch_size,
-    collate_fn,
-    num_workers,
-    shuffle,
-    drop_last,
-    seed=0,
-    pin_memory=True,
-):
+def monitoring_ranges(nquery, nbank):
+    query = range(0, nquery)
+    bank = range(nquery, nquery + nbank)
+    train_start = nquery + nbank
+    return query, bank, train_start
+    
+def make_distributed_dataloader(dataset,
+                                *,
+                                rank,
+                                world_size,
+                                batch_size,
+                                collate_fn,
+                                num_workers,
+                                shuffle,
+                                drop_last,
+                                seed=0,
+                                pin_memory=True):
+    
     sampler = DistributedSampler(
         dataset,
         num_replicas=world_size,
@@ -60,28 +65,26 @@ def make_distributed_dataloader(
     return DataLoader(**kwargs)
 
     
-def build_paired_training_data(
-    *,
-    data_dir,
-    nevents,
-    transform,
-    rank,
-    world_size,
-    batch_size,
-    num_workers,
-    seed,
-):
-    dataset = paired_2d_dataset_ME(
-        data_dir,
-        aug_transform=transform,
-        max_events=nevents,
-    )
+def build_paired_training_data(*,
+                               data_dir,
+                               start,
+                               nevents,
+                               transform,
+                               rank,
+                               world_size,
+                               batch_size,
+                               num_workers,
+                               seed):
+    
+    dataset = paired_2d_dataset_ME(data_dir, aug_transform=transform,
+                                   max_events=start+nevents)
 
-    if len(dataset) < nevents:
-        raise ValueError(
-            f"Requested {nevents} training events, "
-            f"but dataset contains only {len(dataset)}"
-        )
+    if len(dataset) < start+nevents:
+        raise ValueError(f"Requested events [{start}, {start + nevents}), "
+                         f"but dataset contains only {len(dataset)}")
+
+    ## This subset approach ensures that any monitoring set is always the same
+    dataset = Subset(dataset, range(start, start + nevents))
 
     loader = make_distributed_dataloader(
         dataset,
@@ -99,49 +102,34 @@ def build_paired_training_data(
     return dataset, loader
 
 
-def build_monitoring_data(
-    *,
-    data_dir,
-    train_events,
-    nbank,
-    nquery,
-    transform,
-    collate_fn,
-    rank,
-    world_size,
-    batch_size,
-    num_workers,
-    seed,
-):
-    # Ensure DistributedSampler does not need to pad either subset.
-    nbank = (nbank // world_size) * world_size
-    nquery = (nquery // world_size) * world_size
+def build_monitoring_data(*,
+                          data_dir,
+                          nbank,
+                          nquery,
+                          transform,
+                          collate_fn,
+                          rank,
+                          world_size,
+                          batch_size,
+                          num_workers,
+                          seed):
+    
+    # Ensure DistributedSampler does not need to pad either subset
+    for name, n in (("nquery", nquery), ("nbank", nbank)):
+        if n % world_size:
+            raise ValueError(f"{name}={n} is not divisible by world_size={world_size}")
 
-    required_events = train_events + nbank + nquery
+    query_range, bank_range, _ = monitoring_ranges(nquery, nbank)
+    required_events = bank_range.stop
 
-    full_dataset = single_2d_dataset_ME(
-        data_dir,
-        transform=transform,
-        max_events=required_events,
-    )
+    full_dataset = single_2d_dataset_ME(data_dir, transform=transform, max_events=required_events)
 
     if len(full_dataset) < required_events:
-        raise ValueError(
-            f"Monitoring requires {required_events} total events, "
-            f"but dataset contains only {len(full_dataset)}"
-        )
+        raise ValueError(f"Monitoring requires {required_events} total events, "
+                         f"but dataset contains only {len(full_dataset)}")
 
-    bank_start = train_events
-    query_start = bank_start + nbank
-
-    bank_dataset = Subset(
-        full_dataset,
-        range(bank_start, query_start),
-    )
-    query_dataset = Subset(
-        full_dataset,
-        range(query_start, query_start + nquery),
-    )
+    bank_dataset = Subset(full_dataset, bank_range)
+    query_dataset = Subset(full_dataset, query_range)
 
     common = {
         "rank": rank,
@@ -154,64 +142,36 @@ def build_monitoring_data(
         "seed": seed,
     }
 
-    bank_loader = make_distributed_dataloader(
-        bank_dataset,
-        **common,
-    )
-    query_loader = make_distributed_dataloader(
-        query_dataset,
-        **common,
-    )
+    bank_loader = make_distributed_dataloader(bank_dataset, **common)
+    query_loader = make_distributed_dataloader(query_dataset, **common)
 
     print0(f"Loaded {nbank} bank and {nquery} query events for monitoring")
     return bank_loader, query_loader
 
 
-def build_supervised_dataloaders(
-    *,
-    data_dir,
-    ntrain,
-    nval,
-    train_transform,
-    val_transform,
-    rank,
-    world_size,
-    batch_size,
-    num_workers,
-    collate_fn,
-    seed,
-):
-    required_events = ntrain + nval
+def build_labelled_training_data(*,
+                                 data_dir,
+                                 start,
+                                 nevents,
+                                 transform,
+                                 collate_fn,
+                                 rank,
+                                 world_size,
+                                 batch_size,
+                                 num_workers,
+                                 seed):
 
-    train_full = single_2d_dataset_ME(
-        data_dir,
-        transform=train_transform,
-        max_events=required_events,
-    )
-    val_full = single_2d_dataset_ME(
-        data_dir,
-        transform=val_transform,
-        max_events=required_events,
-    )
+    dataset = single_2d_dataset_ME(data_dir, transform=transform, max_events=start+nevents)
 
-    if len(train_full) < required_events:
-        raise ValueError(
-            f"Requested {required_events} total events "
-            f"({ntrain} train + {nval} validation), but only "
-            f"{len(train_full)} are available"
-        )
+    if len(dataset) < start + nevents:
+        raise ValueError(f"Requested events [{start}, {start + nevents}), "
+                         f"but dataset contains only {len(dataset)}")
 
-    train_dataset = Subset(
-        train_full,
-        range(0, ntrain),
-    )
-    val_dataset = Subset(
-        val_full,
-        range(ntrain, required_events),
-    )
-
-    train_loader = make_distributed_dataloader(
-        train_dataset,
+    ## This subset approach ensures that any monitoring set is always the same
+    dataset = Subset(dataset, range(start, start + nevents))
+    
+    loader = make_distributed_dataloader(
+        dataset,
         rank=rank,
         world_size=world_size,
         batch_size=batch_size,
@@ -222,21 +182,6 @@ def build_supervised_dataloaders(
         seed=seed,
     )
 
-    val_loader = make_distributed_dataloader(
-        val_dataset,
-        rank=rank,
-        world_size=world_size,
-        batch_size=batch_size,
-        collate_fn=collate_fn,
-        num_workers=num_workers,
-        shuffle=False,
-        drop_last=False,
-        seed=seed,
-    )
+    print0(f"Loaded {len(dataset)} labelled training events")
+    return dataset, loader
 
-    print0(
-        f"Loaded {required_events} events: "
-        f"{ntrain} training and {nval} validation"
-    )
-
-    return train_dataset, train_loader, val_dataset, val_loader
