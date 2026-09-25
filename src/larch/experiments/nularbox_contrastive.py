@@ -1,20 +1,17 @@
-import numpy as np
 import argparse
 import sys
 import MinkowskiEngine as ME
 import torch
 import time
-import math
-import random
 from collections import defaultdict
 from functools import partial
 from pathlib import Path
+import psutil, os
 
 ## The parallelisation libraries
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch import nn
-from torch.profiler import profile, record_function, ProfilerActivity
 
 ## Includes from my libraries for this project
 from larch.losses.ntxent import NTXentMerged, NTXentMergedMultiGPU
@@ -30,10 +27,7 @@ from larch.optim.lars import log_lars_diagnostics
 
 ## Import datasets
 from larch.datasets.base import solo_labelled_collate_fn
-from larch.datasets.dataloaders import build_paired_training_data, build_monitoring_data
-
-from larch.sysmon import log_memory, log_gpu, log_vmstat
-import psutil, os
+from larch.datasets.dataloaders import build_paired_training_data, build_monitoring_data, monitoring_ranges
 
 ## For logging
 from torch.utils.tensorboard import SummaryWriter
@@ -41,7 +35,7 @@ from torch.utils.tensorboard import SummaryWriter
 ## Import transformations
 from larch.datasets.nularbox.augmentations_2d import get_transform
 
-## Supervised for kNN monitoring
+## Supervised for kNN monitoring and linear probes
 from larch.datasets.nularbox.targets import MULTIPLICITY_TARGETS, LABEL_GROUPS, label_clamp
 from larch.probes import run_probes, log_probe_results
 
@@ -130,8 +124,10 @@ def run_training(rank, local_rank, world_size, args):
         args.aug_val,
     )
     
+    _, _, train_start = monitoring_ranges(args.monitor_nquery, args.monitor_nbank)
     train_dataset, train_loader = build_paired_training_data(
         data_dir=args.data_dir,
+        start=train_start,
         nevents=args.nevents,
         transform=train_transform,
         rank=rank,
@@ -163,7 +159,6 @@ def run_training(rank, local_rank, world_size, args):
     
     bank_loader, query_loader = build_monitoring_data(
         data_dir=args.data_dir,
-        train_events=args.nevents,
         nbank=args.monitor_nbank,
         nquery=args.monitor_nquery,
         transform=monitor_transform,
@@ -183,13 +178,13 @@ def run_training(rank, local_rank, world_size, args):
     state_file = Path(args.run_dir) / args.state_file
     
     ## So we don't constantly ask args
-    num_iterations = args.nepoch
+    nepoch = args.nepoch
     clust_loss_scale = args.clust_loss_scale
     norm_encoder = bool(args.norm_encoder)
     weight_decay = args.weight_decay
     weight_decay_final = args.weight_decay_final
     
-    print0("Training with", num_iterations, "iterations")
+    print0("Training with", nepoch, "epochs")
     writer = None
     if rank==0:
         writer = SummaryWriter(log_dir=log_dir)
@@ -202,12 +197,12 @@ def run_training(rank, local_rank, world_size, args):
     metrics = defaultdict(list)
 
     ## Load the checkpoint if one has been given
-    start_iteration = 0
+    start_epoch = 0
     global_iter = 0
     if args.restart:
-        start_iteration, metrics = load_checkpoint(encoder, heads, optimizer, scheduler, state_file)
-        global_iter = start_iteration*nbatches
-        print0("Restarting from iteration", start_iteration)
+        start_epoch, metrics = load_checkpoint(encoder, heads, optimizer, scheduler, state_file)
+        global_iter = start_epoch*nbatches
+        print0("Restarting from epoch", start_epoch)
 
     ## Load the pretrained model if given
     if args.pretrained:
@@ -230,12 +225,12 @@ def run_training(rank, local_rank, world_size, args):
         )
         prof.__enter__()
         
-    ## Loop over the desired iterations
-    for iteration in range(start_iteration, args.nepoch):
+    ## Loop over the desired epochs
+    for epoch in range(start_epoch, nepoch):
 
-        print0(f"Start of iteration {iteration}")
+        print0(f"Start of epoch {epoch}")
         # Ensure shuffling with the sampler each epoch
-        train_loader.sampler.set_epoch(iteration)
+        train_loader.sampler.set_epoch(epoch)
         
         tot_loss_tensor = torch.tensor(0.0, device=device)  
         losses_tensor = {name: torch.tensor(0.0, device=device) for name in heads.keys()}       
@@ -421,9 +416,10 @@ def run_training(rank, local_rank, world_size, args):
         proj_geom = simclr_geometry_metrics(buffer_proj, device)
 
         ## kNN and linear probe monitoring
-        run_knn = (args.knn_every > 0 and iteration % args.knn_every == 0)
-        run_linear = (args.linear_every > 0 and iteration % args.linear_every == 0)
-
+        is_last_epoch = (epoch == nepoch - 1)
+        run_knn = args.knn_every > 0 and (epoch % args.knn_every == 0 or is_last_epoch)
+        run_linear = args.linear_every > 0 and (epoch % args.linear_every == 0 or is_last_epoch)
+        
         ## Run probes as desired
         knn_results, linear_results = run_probes(encoder,
                                                  bank_loader,
@@ -443,46 +439,46 @@ def run_training(rank, local_rank, world_size, args):
 
         ## Reporting, but only for rank 0
         if rank==0:
-            metrics["iteration"].append(iteration)
-            log_scalar(writer, metrics, 'loss/total', av_tot_loss, iteration)              
-            log_scalar(writer, metrics, 'loss/proj', av_losses["proj"], iteration)
+            metrics["epoch"].append(epoch)
+            log_scalar(writer, metrics, 'loss/total', av_tot_loss, epoch)              
+            log_scalar(writer, metrics, 'loss/proj', av_losses["proj"], epoch)
 
             ## Add metrics for debugging/training diagnostics
-            log_scalar(writer, metrics, 'monitor/proj_alignment', av_proj_align, iteration)
-            log_scalar(writer, metrics, 'monitor/proj_uniformity', av_proj_unif, iteration)
-            log_scalar(writer, metrics, 'monitor/enc_alignment', av_enc_align, iteration)
-            log_scalar(writer, metrics, 'monitor/enc_uniformity', av_enc_unif, iteration)
+            log_scalar(writer, metrics, 'monitor/proj_alignment', av_proj_align, epoch)
+            log_scalar(writer, metrics, 'monitor/proj_uniformity', av_proj_unif, epoch)
+            log_scalar(writer, metrics, 'monitor/enc_alignment', av_enc_align, epoch)
+            log_scalar(writer, metrics, 'monitor/enc_uniformity', av_enc_unif, epoch)
                 
             ## Extensive logging for gradient debugging
-            log_grad_norm(encoder.module, "encoder", writer, iteration)
-            log_grad_rms(encoder.module, "encoder", writer, iteration)
-            log_grad_over_wgt(encoder.module, "encoder", writer, iteration)
-            log_weight_norm(encoder.module, "encoder", writer, iteration)
+            log_grad_norm(encoder.module, "encoder", writer, epoch)
+            log_grad_rms(encoder.module, "encoder", writer, epoch)
+            log_grad_over_wgt(encoder.module, "encoder", writer, epoch)
+            log_weight_norm(encoder.module, "encoder", writer, epoch)
             
-            log_grad_norm(heads["proj"].module, "proj", writer, iteration)
-            log_grad_rms(heads["proj"].module, "proj", writer, iteration)
-            log_grad_over_wgt(heads["proj"].module, "proj", writer, iteration)
-            log_weight_norm(heads["proj"].module, "proj", writer, iteration)
+            log_grad_norm(heads["proj"].module, "proj", writer, epoch)
+            log_grad_rms(heads["proj"].module, "proj", writer, epoch)
+            log_grad_over_wgt(heads["proj"].module, "proj", writer, epoch)
+            log_weight_norm(heads["proj"].module, "proj", writer, epoch)
             
             ## More summary quantities about the encoder and projection spaces
             for name, value in enc_geom.items():
-                log_scalar(writer, metrics, f"eigen/enc_{name}", value, iteration)
+                log_scalar(writer, metrics, f"eigen/enc_{name}", value, epoch)
             for name, value in proj_geom.items():
-                log_scalar(writer, metrics, f"eigen/proj_{name}", value, iteration)                
+                log_scalar(writer, metrics, f"eigen/proj_{name}", value, epoch)                
                 
             if "clust" in heads:
-                log_scalar(writer, metrics, 'loss/clust', av_losses["clust"]+av_entropy, iteration)
-                log_scalar(writer, metrics, 'loss/entropy', av_entropy, iteration)
-                log_scalar(writer, metrics, 'loss/clust_only', av_losses["clust"], iteration)
-                log_scalar(writer, metrics, 'monitor/acc', av_acc, iteration)
-                log_scalar(writer, metrics, 'monitor/clust_alignment', av_clust_align, iteration)
-                log_scalar(writer, metrics, 'monitor/clust_uniformity', av_clust_unif, iteration)
+                log_scalar(writer, metrics, 'loss/clust', av_losses["clust"]+av_entropy, epoch)
+                log_scalar(writer, metrics, 'loss/entropy', av_entropy, epoch)
+                log_scalar(writer, metrics, 'loss/clust_only', av_losses["clust"], epoch)
+                log_scalar(writer, metrics, 'monitor/acc', av_acc, epoch)
+                log_scalar(writer, metrics, 'monitor/clust_alignment', av_clust_align, epoch)
+                log_scalar(writer, metrics, 'monitor/clust_uniformity', av_clust_unif, epoch)
 
                 ## Extensive logging for gradient debugging
-                log_grad_norm(heads["clust"].module, "clust", writer, iteration)
-                log_grad_rms(heads["clust"].module, "clust", writer, iteration)
-                log_grad_over_wgt(heads["clust"].module, "clust", writer, iteration)
-                log_weight_norm(heads["clust"].module, "clust", writer, iteration)
+                log_grad_norm(heads["clust"].module, "clust", writer, epoch)
+                log_grad_rms(heads["clust"].module, "clust", writer, epoch)
+                log_grad_over_wgt(heads["clust"].module, "clust", writer, epoch)
+                log_weight_norm(heads["clust"].module, "clust", writer, epoch)
 
             if proj_loss_parts is not None:
                 for name, value in av_proj_loss_parts.items():
@@ -491,18 +487,18 @@ def run_training(rank, local_rank, world_size, args):
                         metrics,
                         f"vicreg/{name}",
                         value,
-                        iteration,
+                        epoch,
                     )
 
             ## Logs all of the kNN and linear probe results
-            log_probe_results(writer, metrics, knn_results, linear_results, iteration)
+            log_probe_results(writer, metrics, knn_results, linear_results, epoch)
                     
             if scheduler: 
-                log_scalar(writer, metrics, 'train/lr', scheduler.get_last_lr()[0], iteration)
-            log_scalar(writer, metrics, 'train/weight_decay', this_wd, iteration)
+                log_scalar(writer, metrics, 'train/lr', scheduler.get_last_lr()[0], epoch)
+            log_scalar(writer, metrics, 'train/weight_decay', this_wd, epoch)
 
             ## Build a string to report the outcome
-            iter_string = f"Processed {iteration} / {start_iteration + num_iterations}; loss = {av_tot_loss:.4f}"
+            iter_string = f"Processed {epoch} / {nepoch}; loss = {av_tot_loss:.4f}"
             
             if "clust" in heads:
                 iter_string += f" ({av_losses['proj']:.4f} + {av_losses['clust']:.4f} + {av_entropy:.4f}); acc = {av_acc:.4f}"
@@ -510,8 +506,8 @@ def run_training(rank, local_rank, world_size, args):
             print0(f"Time taken: {(time.time()-tstart):.2f}")
             
         ## For checkpointing
-        #if rank==0 and iteration%25 == 0 and iteration != 0:
-        #    save_checkpoint(encoder, heads, optimizer, scheduler, state_file+".check"+str(iteration), iteration, metrics, args)
+        #if rank==0 and epoch%25 == 0 and epoch != 0:
+        #    save_checkpoint(encoder, heads, optimizer, scheduler, state_file+".check"+str(epoch), epoch, metrics, args)
 
         ## Add per GPU logging
         allocated_gb = torch.tensor(torch.cuda.memory_allocated() / 1e9, device=device)
@@ -533,24 +529,24 @@ def run_training(rank, local_rank, world_size, args):
             proc = psutil.Process(os.getpid())
             io = psutil.disk_io_counters()
 
-            log_scalar(writer, metrics, 'syst_monitor/vm_used_gb', vm.used / 1e9, iteration)
-            log_scalar(writer, metrics, 'syst_monitor/vm_avail_gb', vm.available / 1e9, iteration)
-            log_scalar(writer, metrics, 'syst_monitor/vm_cached_gb', getattr(vm, "cached", 0) / 1e9, iteration)
-            log_scalar(writer, metrics, 'syst_monitor/rss_gb', proc.memory_info().rss / 1e9, iteration)
-            log_scalar(writer, metrics, 'syst_monitor/num_fds', proc.num_fds(), iteration)
-            log_scalar(writer, metrics, 'syst_monitor/io_read', io.read_bytes, iteration)
-            log_scalar(writer, metrics, 'syst_monitor/io_write', io.write_bytes, iteration)
-            log_scalar(writer, metrics, 'syst_monitor/mem_pressure', vm.available / vm.total, iteration)
-            log_scalar(writer, metrics, 'syst_monitor/first_batch_latency', first_batch_latency, iteration)
+            log_scalar(writer, metrics, 'syst_monitor/vm_used_gb', vm.used / 1e9, epoch)
+            log_scalar(writer, metrics, 'syst_monitor/vm_avail_gb', vm.available / 1e9, epoch)
+            log_scalar(writer, metrics, 'syst_monitor/vm_cached_gb', getattr(vm, "cached", 0) / 1e9, epoch)
+            log_scalar(writer, metrics, 'syst_monitor/rss_gb', proc.memory_info().rss / 1e9, epoch)
+            log_scalar(writer, metrics, 'syst_monitor/num_fds', proc.num_fds(), epoch)
+            log_scalar(writer, metrics, 'syst_monitor/io_read', io.read_bytes, epoch)
+            log_scalar(writer, metrics, 'syst_monitor/io_write', io.write_bytes, epoch)
+            log_scalar(writer, metrics, 'syst_monitor/mem_pressure', vm.available / vm.total, epoch)
+            log_scalar(writer, metrics, 'syst_monitor/first_batch_latency', first_batch_latency, epoch)
 
             for gpu_rank in range(world_size):
-                log_scalar(writer, metrics, f'syst_monitor/gpu{gpu_rank}_allocated_gb',  all_allocated[gpu_rank].item(),  iteration)
-                log_scalar(writer, metrics, f'syst_monitor/gpu{gpu_rank}_reserved_gb',   all_reserved[gpu_rank].item(),   iteration)
-                log_scalar(writer, metrics, f'syst_monitor/gpu{gpu_rank}_peak_alloc_gb', all_peak_alloc[gpu_rank].item(), iteration)
+                log_scalar(writer, metrics, f'syst_monitor/gpu{gpu_rank}_allocated_gb',  all_allocated[gpu_rank].item(),  epoch)
+                log_scalar(writer, metrics, f'syst_monitor/gpu{gpu_rank}_reserved_gb',   all_reserved[gpu_rank].item(),   epoch)
+                log_scalar(writer, metrics, f'syst_monitor/gpu{gpu_rank}_peak_alloc_gb', all_peak_alloc[gpu_rank].item(), epoch)
                 
     ## Final version of the model
     if rank==0:
-        save_checkpoint(encoder, heads, optimizer, scheduler, state_file, iteration, metrics, args)
+        save_checkpoint(encoder, heads, optimizer, scheduler, state_file, epoch, metrics, args)
         writer.close()
 
     ## Report profiler if requested
