@@ -1,5 +1,6 @@
 import torch
 import time
+import math
 import MinkowskiEngine as ME
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -14,7 +15,7 @@ def extract_features(encoder,
                      loader,
                      device,
                      label_names,
-                     label_groups=("particle_truth", "particle_visible")):
+                     label_groups):
     
     was_training = encoder.training
     encoder.eval()
@@ -203,7 +204,8 @@ def fit_linear_probe(bank_features,
                      epochs=20,
                      batch_size=1024,
                      lr=1e-2,
-                     seed=12345):
+                     seed=12345,
+                     print_debug=False):
     
     # Move everything to the GPU for speed... imposes an implicit limit on the bank and query size
     bank_features = bank_features.detach().float().to(device)
@@ -222,11 +224,7 @@ def fit_linear_probe(bank_features,
 
     # Fit feature preprocessing using the bank only.
     mean = bank_features.mean(dim=0, keepdim=True)
-    std = bank_features.std(
-        dim=0,
-        unbiased=False,
-        keepdim=True,
-    )
+    std = bank_features.std(dim=0, unbiased=False, keepdim=True)
     
     # Prevent very low-variance dimensions from receiving huge amplification.
     std_floor = 0.01 * std.median()
@@ -236,11 +234,7 @@ def fit_linear_probe(bank_features,
     query_features = (query_features - mean) / std_safe
 
     # Avoid probe initialization/training changing the main training RNG.
-    cuda_devices = (
-        [device.index]
-        if device.type == "cuda"
-        else []
-    )
+    cuda_devices = ([device.index] if device.type == "cuda" else [])
 
     with torch.random.fork_rng(devices=cuda_devices):
         torch.manual_seed(seed)
@@ -248,8 +242,12 @@ def fit_linear_probe(bank_features,
         probe = SupervisedHead(encoder_dim=bank_features.shape[1],
                                classifier_config=classifier_config).to(device)
 
-        optimizer = torch.optim.AdamW(probe.parameters(), lr=lr, weight_decay=0.0)
-
+        ## Use Adam with a cosine scheduler
+        optimizer = torch.optim.AdamW(probe.parameters(), lr=lr, weight_decay=0.0, fused=True)
+        nbank = bank_features.shape[0]
+        steps_per_epoch = math.ceil(nbank / batch_size)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs * steps_per_epoch)
+        
         generator = torch.Generator()
         generator.manual_seed(seed)
 
@@ -257,8 +255,8 @@ def fit_linear_probe(bank_features,
 
         for i in range(epochs):
             
-            #sum_loss = torch.zeros((), device=device)
-            #num_samples = 0
+            sum_loss = torch.zeros((), device=device)
+            num_samples = 0
             
             permutation = torch.randperm(
                 bank_features.shape[0],
@@ -272,21 +270,20 @@ def fit_linear_probe(bank_features,
                 labels = {name: values[indices] for name, values in bank_labels.items()}
 
                 outputs = probe(features)
-
                 loss, _ = supervised_loss(outputs, labels, classifier_config)
 
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 optimizer.step()
+                scheduler.step()
 
-                #this_batch_size = features.shape[0]
-                #sum_loss += loss.detach().double()*this_batch_size
-                #num_samples += this_batch_size
+                this_batch_size = features.shape[0]
+                sum_loss += loss.detach().double()*this_batch_size
+                num_samples += this_batch_size
 
             ## Report the average loss for this epoch
-            #av_loss = sum_loss/max(num_samples, 1)
-            #print0(f"{i}: loss = {av_loss.item()}")
-                
+            if print_debug: print0(f"{i}: loss = {(sum_loss/max(num_samples, 1)).item():.4f}")
+
         # Evaluate on the query split.
         probe.eval()
 
@@ -330,19 +327,19 @@ def run_probes(encoder,
     if not (run_knn or run_linear):
         return None, None
 
-    tstart = time.time()
+    torch.cuda.synchronize(); tstart = time.time()
     bank_f, bank_l = extract_features(encoder, bank_loader, device, targets.keys())
     qry_f, qry_l = extract_features(encoder, query_loader, device, targets.keys())
-
+    
     knn_results = None
     linear_results = None
 
     if rank == 0 and run_knn:
+        print0("Running kNN probes")
         knn_results = {}
         for metric in knn_metrics:
             knn_results[metric] = {}
             for group in label_groups:
-                print0(f"Running {metric} kNN for {group}")
                 knn_results[metric][group] = evaluate_knn(
                     bank_f, bank_l[group],
                     qry_f, qry_l[group],
@@ -353,10 +350,11 @@ def run_probes(encoder,
                     pca_dims=knn_pca,
                 )
 
+    torch.cuda.synchronize(); t = time.time()
     if rank == 0 and run_linear:
+        print0(f"Running linear probes")
         linear_results = {}
         for group in label_groups:
-            print0(f"Running linear probe for {group}")
             linear_results[group] = fit_linear_probe(
                 bank_f, bank_l[group],
                 qry_f, qry_l[group],
