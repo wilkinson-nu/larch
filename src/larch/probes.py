@@ -328,8 +328,8 @@ def run_probes(encoder,
         return None, None
 
     torch.cuda.synchronize(); tstart = time.time()
-    bank_f, bank_l = extract_features(encoder, bank_loader, device, targets.keys())
-    qry_f, qry_l = extract_features(encoder, query_loader, device, targets.keys())
+    bank_f, bank_l = extract_features(encoder, bank_loader, device, targets.keys(), label_groups)
+    qry_f, qry_l = extract_features(encoder, query_loader, device, targets.keys(), label_groups)
     
     knn_results = None
     linear_results = None
