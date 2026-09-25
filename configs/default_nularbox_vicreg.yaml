@@ -65,14 +65,14 @@ vicreg_cov_coeff: 1.0
 
 ## ---- kNN and linear probe monitoring ----
 monitor_nbank: 100000
-monitor_nquery: 20000
+monitor_nquery: 100000
 knn_every: 2
 knn_k: 31
 knn_pca: 256
 linear_every: 2
-linear_epochs: 100
-linear_batch_size: 1024
-linear_lr: 0.005
+linear_epochs: 20
+linear_batch_size: 8192
+linear_lr: 0.01
 
 ## ---- profiling / logging ----
 run_profiler: 0
