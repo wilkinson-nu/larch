@@ -93,7 +93,6 @@ class ClassificationMetrics:
         for name, cfg in self.classifier_config.items():
             scores = outputs[name]
             targets = labels[name].long()
-            n_classes = cfg["n_classes"]
 
             ## Multiplicity MAE
             predictions = scores.argmax(dim=-1)
