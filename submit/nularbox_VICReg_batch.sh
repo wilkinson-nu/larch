@@ -10,7 +10,7 @@ WALLTIME=480
 IMAGE=docker:wilkinsonnu/ml_tools:ME
 
 ## These are fixed for now
-NEPOCH=2
+NEPOCH=50
 BATCH_SIZE=1024
 CONFIG=default_nularbox_vicreg.yaml
 NEVENTS=2000000
