@@ -368,3 +368,21 @@ def get_encoder(args):
                   stem_channels=stem_channels)
     
     return encoder
+
+## Every args attribute get_encoder reads, plus the input resolution.
+## A frozen encoder must be rebuilt from exactly these values.
+ENCODER_ARG_KEYS = (
+    "enc_act",
+    "enc_arch",
+    "enc_arch_pool",
+    "enc_res_pool",
+    "enc_stem_norm",
+    "enc_init_stem_stride",
+    "enc_final_stem_stride",
+    "enc_stem_pool",
+    "enc_stem_deep",
+    "enc_layer1_norm",
+    "enc_final_linear",
+    "enc_stem_channels",
+    "out_image_size",
+)

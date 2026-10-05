@@ -57,3 +57,24 @@ def save_checkpoint(encoder, heads, optimizer, scheduler, state_file_name, itera
 
     torch.save(state_dict, state_file_name)
     
+
+def read_encoder_checkpoint(path, keys):
+
+    path = Path(os.path.expandvars(path)).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"pretrained checkpoint not found: {path}")
+
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+
+    saved = ckpt.get("args")
+    if saved is None:
+        raise ValueError(f"{path} has no saved args; cannot rebuild the encoder")
+    if not isinstance(saved, dict):
+        saved = vars(saved)
+
+    missing = [k for k in keys if k not in saved]
+    if missing:
+        raise ValueError(f"{path} is missing encoder settings: {missing}")
+
+    enc_cfg = {k: saved[k] for k in keys}
+    return enc_cfg, ckpt["encoder"], ckpt.get("epoch"), path
