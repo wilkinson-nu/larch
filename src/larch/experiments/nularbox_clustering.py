@@ -31,9 +31,9 @@ from torch.utils.tensorboard import SummaryWriter
 ## Import transformations
 from larch.datasets.nularbox.augmentations_2d import get_transform
 
-## Supervised for kNN monitoring and linear probes
-from larch.datasets.nularbox.targets import MULTIPLICITY_TARGETS, LABEL_GROUPS, label_clamp
-from larch.probes import run_probes, log_probe_results
+## Cluster-specific metrics
+from larch.probes import extract_features
+from larch.cluster_metrics import encoder_neighbours, run_cluster_monitoring, log_cluster_metrics
 
 ## Utilities for multi-rank training
 from larch.distributed import setup_distributed_runtime, print0
@@ -99,12 +99,7 @@ def run_training(rank, local_rank, world_size, args, enc_state):
         args.aug_val,
     )
 
-    ## All of the monitoring block is currently poorly aligned with the purpose of this experiment
-    ## If the clustering is a classifier, it's pointless to run kNN + linear probes on the clustering head
-    ## But maybe there could be a point if the clustering head changed?
-    ## Could be useful to make a new metrics block to see in more detail when labels fall in distinct clusters
-    ## Or, maybe I should look at some metrics in the encoded space, using the clustering head labels?
-    ## E.g., silhouette score or similar
+    ## E.g., Independent monitoring
     _, _, train_start = monitoring_ranges(args.monitor_nquery, args.monitor_nbank)
     train_dataset, train_loader = build_paired_training_data(
         data_dir=args.data_dir,
@@ -119,25 +114,6 @@ def run_training(rank, local_rank, world_size, args, enc_state):
     )
     nbatches   = len(train_loader)
 
-    ## Setup the monitoring dataset
-    monitor_transform = get_transform(args.out_image_size, "no_aug")
-
-    ## Use the default label groups to run monitoring probes on
-    MONITOR_LABEL_GROUPS = LABEL_GROUPS
-
-    ## Apply maxima to the N. particle groups of interest
-    MONITOR_CONFIG = MULTIPLICITY_TARGETS
-    
-    MONITOR_CLAMP = {
-        name: label_clamp(MULTIPLICITY_TARGETS)
-        for name in MONITOR_LABEL_GROUPS
-    }
-    
-    monitor_collate = partial(
-        solo_labelled_collate_fn,
-        label_clamp=MONITOR_CLAMP,
-    )
-    
     bank_loader, query_loader = build_monitoring_data(
         data_dir=args.data_dir,
         nbank=args.monitor_nbank,
@@ -151,6 +127,33 @@ def run_training(rank, local_rank, world_size, args, enc_state):
         seed=args.seed,
     )
 
+    ## Encoder is frozen, so extract features once, and then cache
+    NBR_METRICS = ("cosine", "euclidean")
+
+    qry_f, _ = extract_features(encoder, query_loader, device)
+    
+    norm_encoder = bool(args.norm_encoder)
+    monitor_feats = None
+    monitor_nbrs = None
+    if rank == 0:
+        monitor_feats = qry_f.float().to(device)
+        
+        ## Calculate neighbours
+        monitor_nbrs = {metric: encoder_neighbours(monitor_feats, k=args.monitor_k, metric=metric)
+                        for metric in NBR_METRICS}
+        
+        ## Follow the encoder normalization used in training
+        if norm_encoder: monitor_feats = torch.nn.functional.normalize(monitor_feats, p=2, dim=1)
+
+        print0(f"Cached {monitor_feats.shape[0]} query events for cluster monitoring")
+
+    ## Loaders are no longer needed
+    del qry_f, bank_loader, query_loader
+    torch.cuda.empty_cache()
+
+    ## Keep track of assignments from the last iteration
+    prev_assign = None
+
     ## Make the log directory
     log_dir = Path(args.run_dir) / args.log
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -160,7 +163,6 @@ def run_training(rank, local_rank, world_size, args, enc_state):
     
     ## So we don't constantly ask args
     nepoch = args.nepoch
-    norm_encoder = bool(args.norm_encoder)
     weight_decay = args.weight_decay
     weight_decay_final = args.weight_decay_final
     
@@ -282,6 +284,16 @@ def run_training(rank, local_rank, world_size, args, enc_state):
         av_acc = total_acc_tensor.item() / (nbatches * world_size)
         av_clust_unif = total_clust_unif_tensor.item() / (nbatches * world_size)
         av_clust_align = total_clust_align_tensor.item() / (nbatches * world_size)
+
+        ## Cluster monitoring on cached query features (rank 0 only, milliseconds)
+        cluster_results = None
+        if rank == 0:
+            cluster_results, prev_assign = run_cluster_monitoring(
+                heads["clust"].module,
+                monitor_feats,
+                monitor_nbrs,
+                prev_assign,
+            )
         
         ## Reporting, but only for rank 0
         if rank==0:
@@ -293,7 +305,11 @@ def run_training(rank, local_rank, world_size, args, enc_state):
             log_scalar(writer, metrics, 'monitor/acc', av_acc, epoch)
             log_scalar(writer, metrics, 'monitor/clust_alignment', av_clust_align, epoch)
             log_scalar(writer, metrics, 'monitor/clust_uniformity', av_clust_unif, epoch)
-            
+
+            ## Cluster metrics
+            for name, value in cluster_results.items():
+                log_scalar(writer, metrics, f"cluster/{name}", value, epoch)
+                
             ## Extensive logging for gradient debugging
             log_grad_norm(heads["clust"].module, "clust", writer, epoch)
             log_grad_rms(heads["clust"].module, "clust", writer, epoch)
@@ -405,16 +421,10 @@ def build_parser():
     parser.add_argument('--nclusters', type=int)
     parser.add_argument('--entropy_scale', type=float)
 
-    ## kNN and linear probe monitoring options
+    ## Monitoring arguments
     parser.add_argument('--monitor_nbank', type=int)
     parser.add_argument('--monitor_nquery', type=int)
-    parser.add_argument('--knn_every', type=int)
-    parser.add_argument('--knn_k', type=int)
-    parser.add_argument('--knn_pca', type=int)
-    parser.add_argument("--linear_every", type=int)
-    parser.add_argument("--linear_epochs", type=int)
-    parser.add_argument("--linear_batch_size", type=int)
-    parser.add_argument("--linear_lr", type=float)
+    parser.add_argument('--monitor_k', type=int)
     
     ## Optional profiler
     parser.add_argument('--run_profiler', type=int, choices=[0,1])

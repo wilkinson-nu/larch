@@ -14,8 +14,8 @@ KNN_METRICS = ("cosine", "euclidean")
 def extract_features(encoder,
                      loader,
                      device,
-                     label_names,
-                     label_groups):
+                     label_names = {},
+                     label_groups = {}):
     
     was_training = encoder.training
     encoder.eval()
