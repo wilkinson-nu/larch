@@ -19,7 +19,7 @@ from larch.models.resnet_encoder import get_encoder, ENCODER_ARG_KEYS
 from larch.models.clustering_head import get_clusthead
 from larch.metrics import argmax_consistency, uniformity, alignment
 from larch.training.logging import log_scalar, log_grad_norm, log_grad_rms, log_grad_over_wgt, log_weight_norm
-from larch.optim.scheduling import get_opt_and_sched, update_weight_decay
+from larch.optim.scheduling import build_param_groups, build_onecycle, update_weight_decay
 
 ## Import datasets
 from larch.datasets.base import solo_labelled_collate_fn
@@ -176,7 +176,12 @@ def run_training(rank, local_rank, world_size, args, enc_state):
 
     ## Sort out the optimizer (one for each GPU...)
     nstep_total = nbatches*args.nepoch
-    optimizer, scheduler = get_opt_and_sched(args, encoder, heads, nstep_total, world_size, print_debug=False)
+    param_groups = build_param_groups(None, heads,
+                                      weight_decay=args.weight_decay,
+                                      weight_decay_head=True,
+                                      print_debug=(rank == 0))
+    optimizer = torch.optim.AdamW(param_groups, lr=args.lr)
+    scheduler = build_onecycle(optimizer, args.lr, nstep_total)
     
     ## Set up metrics
     metrics = defaultdict(list)
@@ -402,16 +407,10 @@ def build_parser():
     ## Training dynamics
     parser.add_argument('--lr', type=float)
     parser.add_argument('--batch_size', type=int)
-    parser.add_argument('--optimizer', type=str)
-    parser.add_argument('--scheduler', type=str)
-    parser.add_argument('--lars_trust_coeff', type=float)
-    parser.add_argument('--lars_momentum', type=float)
     parser.add_argument('--dropout', type=float)
     parser.add_argument('--weight_decay', type=float)
     parser.add_argument('--weight_decay_final', type=float)
-    parser.add_argument('--weight_decay_head', type=int, choices=[0,1])
     parser.add_argument('--norm_encoder', type=int, choices=[0,1])
-    parser.add_argument('--non_lars_lr_scale', type=float)
     
     ## Image size and augmentations
     parser.add_argument('--aug_type', type=str)

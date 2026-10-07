@@ -9,16 +9,10 @@ log: log
 ## ---- training dynamics ----
 lr: 1.0e-3
 batch_size: 4096
-optimizer: adam
-scheduler: onecycle
-lars_trust_coeff: 0.001
-lars_momentum: 0.9
 dropout: 0.0
 weight_decay: 0
 weight_decay_final: -1.0   # -1 -> no WD schedule
-weight_decay_head: 1
 norm_encoder: 0
-non_lars_lr_scale: 0.03
 
 ## ---- image size and augmentations ----
 aug_type: v1m
