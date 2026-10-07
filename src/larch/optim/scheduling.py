@@ -2,23 +2,16 @@ import torch
 import math
 from torch import optim
 from larch.optim.lars import LARS, LARS_LRScheduler
-from larch.models.resnetv1_blocks import Bottleneck, BasicBlock
 from larch.distributed import print0
 
-def get_final_residual_gamma_ids(encoder):
-    enc = encoder.module if hasattr(encoder, "module") else encoder
-    ids = set()
-
-    for module in enc.modules():
-        if isinstance(module, Bottleneck):
-            if module.norm3 is not None:
-                ids.add(id(module.norm3.bn.weight))
-
-        elif isinstance(module, BasicBlock):
-            if module.norm2 is not None:
-                ids.add(id(module.norm2.bn.weight))
-
-    return ids
+def build_onecycle(optimizer, max_lr, total_steps):
+    return optim.lr_scheduler.OneCycleLR(optimizer,
+                                         max_lr=max_lr,
+                                         total_steps=total_steps,
+                                         pct_start=0.1,
+                                         div_factor=25,
+                                         final_div_factor=1e4,
+                                         cycle_momentum=False)
 
 def get_opt_and_sched(args, encoder, heads, total_steps, world_size, print_debug=False):
 
@@ -37,7 +30,7 @@ def get_opt_and_sched(args, encoder, heads, total_steps, world_size, print_debug
     
     ## Sort out the optimizer (one for each GPU...)
     if args.optimizer == 'lars':
-        if print_debug: print0("Optimizer = LARS; LR =", args.lr, "(", args.lr * (args.batch_size*world_size / 256), "); trust =", args.lars_trust_coeff, "; mom =", args.lars_momentum)
+        if print_debug: print0(f"Optimizer = LARS; LR = {args.lr} ({args.lr*(args.batch_size*world_size/256)}); trust = {args.lars_trust_coeff}; mom = {args.lars_momentum}")
         corr_lr = args.lr * (args.batch_size*world_size / 256)
         optimizer = LARS(
             param_groups,
@@ -55,21 +48,15 @@ def get_opt_and_sched(args, encoder, heads, total_steps, world_size, print_debug
             param_groups,
             lr=args.lr,
         )
-        #if args.scheduler == "onecycle":
-        scheduler = optim.lr_scheduler.OneCycleLR(optimizer,
-                                                  max_lr=args.lr,
-                                                  total_steps=total_steps,
-                                                  pct_start=0.1,      # 10% warmup
-                                                  div_factor=25,      # start at max_lr/25
-                                                  final_div_factor=1e4,  # end at max_lr/1e4
-                                                  cycle_momentum=False)
         if args.scheduler == "step":
             scheduler = optim.lr_scheduler.MultiStepLR(optimizer,
                                                        milestones=[150,300,450],
                                                        gamma=0.1,
                                                        last_epoch=-1,
                                                        verbose=False)
-
+        else:
+            ## Default to "onecycle"
+            scheduler = build_onecycle(optimizer, args.lr, total_steps)
     
     return optimizer, scheduler
 
@@ -88,23 +75,16 @@ def build_param_groups(encoder,
     enc_params  = []
     omit_params = []
     head_params = []
-    residual_gamma_params = []
 
     enc_names  = []
     omit_names = []
     head_names = []
-    residual_gamma_names = []
-
-    residual_gamma_ids = get_final_residual_gamma_ids(encoder)
     
     for name, param in encoder.named_parameters():
         if not param.requires_grad:
             continue
 
-        if id(param) in residual_gamma_ids:
-            residual_gamma_params.append(param)
-            residual_gamma_names.append(name)
-        elif param.ndim == 1 or name.endswith(".bias"):
+        if param.ndim == 1 or name.endswith(".bias"):
             omit_params.append(param)
             omit_names.append(name)
         else:
@@ -133,10 +113,6 @@ def build_param_groups(encoder,
         for name, param in zip(enc_names, enc_params):
             print0(f"  LARS + WD:       {name:60s} {tuple(param.shape)}")
 
-        print0(f"RES GAMMA ({len(residual_gamma_params)} parameters):")
-        for name, param in zip(residual_gamma_names, residual_gamma_params):
-            print0(f"  NO LARS / NO WD:  {name:60s} {tuple(param.shape)}")        
-            
         print0(f"OMITTED ({len(omit_params)} parameters):")
         for name, param in zip(omit_names, omit_params):
             print0(f"  NO LARS / NO WD:  {name:60s} {tuple(param.shape)}")
@@ -175,15 +151,6 @@ def build_param_groups(encoder,
             "weight_sched": weight_sched and weight_decay_head,
             "lars_exclude": False
         },
-        {
-            "group_name": "residual_gamma",
-            "params": residual_gamma_params,
-            "names": residual_gamma_names,
-            "weight_decay": 0.0,
-            "weight_sched": False,
-            "lars_exclude": True,
-            "lr_scale": non_lars_lr_scale,
-        }
     ]
 
 def update_weight_decay(optimizer, 
