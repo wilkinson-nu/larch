@@ -33,7 +33,7 @@ from larch.datasets.nularbox.augmentations_2d import get_transform
 
 ## Cluster-specific metrics
 from larch.probes import extract_features
-from larch.cluster_metrics import encoder_neighbours, run_cluster_monitoring, log_cluster_metrics
+from larch.cluster_metrics import encoder_neighbours, run_cluster_monitoring
 
 ## Utilities for multi-rank training
 from larch.distributed import setup_distributed_runtime, print0
@@ -99,7 +99,7 @@ def run_training(rank, local_rank, world_size, args, enc_state):
         args.aug_val,
     )
 
-    ## E.g., Independent monitoring
+    ## Independent monitoring
     _, _, train_start = monitoring_ranges(args.monitor_nquery, args.monitor_nbank)
     train_dataset, train_loader = build_paired_training_data(
         data_dir=args.data_dir,
@@ -114,12 +114,15 @@ def run_training(rank, local_rank, world_size, args, enc_state):
     )
     nbatches   = len(train_loader)
 
+    ## Setup the monitoring dataset
+    monitor_transform = get_transform(args.out_image_size, "no_aug")
+    
     bank_loader, query_loader = build_monitoring_data(
         data_dir=args.data_dir,
         nbank=args.monitor_nbank,
         nquery=args.monitor_nquery,
         transform=monitor_transform,
-        collate_fn=monitor_collate,
+        collate_fn=solo_labelled_collate_fn,
         rank=rank,
         world_size=world_size,
         batch_size=args.batch_size,
@@ -418,6 +421,7 @@ def build_parser():
     ## Clustering head
     parser.add_argument('--clust_arch', type=str)
     parser.add_argument('--clust_temp', type=float)
+    parser.add_argument('--nhidden', type=int)
     parser.add_argument('--nclusters', type=int)
     parser.add_argument('--entropy_scale', type=float)
 
