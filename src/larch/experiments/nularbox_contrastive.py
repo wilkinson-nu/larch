@@ -22,7 +22,7 @@ from larch.models.projection_head import get_projhead
 from larch.models.clustering_head import get_clusthead
 from larch.metrics import argmax_consistency, uniformity, alignment, simclr_geometry_metrics
 from larch.training.logging import log_scalar, log_grad_norm, log_grad_rms, log_grad_over_wgt, log_weight_norm
-from larch.optim.scheduling import get_opt_and_sched, cosine_scheduler, update_weight_decay
+from larch.optim.scheduling import get_opt_and_sched, update_weight_decay
 from larch.optim.lars import log_lars_diagnostics
 
 ## Import datasets
