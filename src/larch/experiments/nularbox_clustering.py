@@ -446,8 +446,13 @@ def main(argv=None):
     apply_config(parser, load_config(known.config))
     args = parser.parse_args(argv)
 
+    ## Resolve the path to the pretrained file here
+    pretrained = Path(os.path.expandvars(args.pretrained)).expanduser()
+    if not pretrained.is_absolute():
+        pretrained = Path(args.run_dir) / pretrained
+    
     enc_cfg, enc_state, pretrained_epoch, pretrained_path = read_encoder_checkpoint(
-        args.pretrained, ENCODER_ARG_KEYS,
+        pretrained, ENCODER_ARG_KEYS,
     )
 
     for key, value in enc_cfg.items():
