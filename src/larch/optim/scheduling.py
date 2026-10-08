@@ -79,17 +79,19 @@ def build_param_groups(encoder,
     enc_names  = []
     omit_names = []
     head_names = []
-    
-    for name, param in encoder.named_parameters():
-        if not param.requires_grad:
-            continue
 
-        if param.ndim == 1 or name.endswith(".bias"):
-            omit_params.append(param)
-            omit_names.append(name)
-        else:
-            enc_params .append(param)
-            enc_names .append(name)
+
+    if encoder is not None:
+        for name, param in encoder.named_parameters():
+            if not param.requires_grad:
+                continue
+
+            if param.ndim == 1 or name.endswith(".bias"):
+                omit_params.append(param)
+                omit_names.append(name)
+            else:
+                enc_params .append(param)
+                enc_names .append(name)
             
     for module in list(heads.values()):
         for name, param in module.named_parameters():
