@@ -307,7 +307,6 @@ def run_training(rank, local_rank, world_size, args, enc_state):
         if rank==0:
             metrics["epoch"].append(epoch)
             log_scalar(writer, metrics, 'loss/total', av_tot_loss, epoch)              
-            log_scalar(writer, metrics, 'loss/clust', av_losses["clust"]+av_entropy, epoch)
             log_scalar(writer, metrics, 'loss/entropy', av_entropy, epoch)
             log_scalar(writer, metrics, 'loss/clust_only', av_losses["clust"], epoch)
             log_scalar(writer, metrics, 'monitor/acc', av_acc, epoch)
@@ -457,8 +456,9 @@ def main(argv=None):
 
     for key, value in enc_cfg.items():
         setattr(args, key, value)
-        args.pretrained = str(pretrained_path)
-        args.pretrained_epoch = pretrained_epoch
+
+    args.pretrained = str(pretrained_path)
+    args.pretrained_epoch = pretrained_epoch
     
     ## Note global and local ranks to allow multi-node training 
     rank       = int(os.environ.get("SLURM_PROCID", 0))
