@@ -207,16 +207,16 @@ def get_clusthead(nchan, args):
     if args.clust_arch == "none":
         clust_head = None
     elif args.clust_arch == "one":
-        clust_head = ClusteringHeadOneLayer(nchan, args.nclusters, args.clust_temp)
+        clust_head = ClusteringHeadOneLayer(nchan, args.nclusters, args.head_temp)
     elif args.clust_arch == "twobn":
-        clust_head = ClusteringHeadTwoLayer(nchan, args.nclusters, getattr(args, "nhidden", -1), args.clust_temp, hidden_act_fn, apply_bn=True)
+        clust_head = ClusteringHeadTwoLayer(nchan, args.nclusters, args.nhidden, args.head_temp, hidden_act_fn, apply_bn=True)
     elif args.clust_arch == "two":
-        clust_head = ClusteringHeadTwoLayer(nchan, args.nclusters, getattr(args, "nhidden", -1), args.clust_temp, hidden_act_fn, apply_bn=False)
+        clust_head = ClusteringHeadTwoLayer(nchan, args.nclusters, args.nhidden, args.head_temp, hidden_act_fn, apply_bn=False)
     elif args.clust_arch == "threebn":
-        clust_head = ClusteringHeadThreeLayer(nchan, args.nclusters, getattr(args, "nhidden", -1), args.clust_temp, hidden_act_fn, apply_bn=True)
+        clust_head = ClusteringHeadThreeLayer(nchan, args.nclusters, args.nhidden, args.head_temp, hidden_act_fn, apply_bn=True)
     elif args.clust_arch == "three":
-        clust_head = ClusteringHeadThreeLayer(nchan, args.nclusters, getattr(args, "nhidden", -1), args.clust_temp, hidden_act_fn, apply_bn=False)
+        clust_head = ClusteringHeadThreeLayer(nchan, args.nclusters, args.nhidden, args.head_temp, hidden_act_fn, apply_bn=False)
     elif args.clust_arch == "logits":
-        clust_head = ClusteringHeadLogits(nchan, args.nclusters, getattr(args, "nhidden", -1), hidden_act_fn, apply_bn=False)
+        clust_head = ClusteringHeadLogits(nchan, args.nclusters, args.nhidden, hidden_act_fn, apply_bn=False)
         
     return clust_head

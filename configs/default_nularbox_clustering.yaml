@@ -21,7 +21,8 @@ aug_val: 0.0
 
 ## ---- Contrastive clustering head ----
 clust_arch: twobn
-clust_temp: 0.5
+clust_temp: 0.5 ## This is used in the contrastive clustering loss
+head_temp: 1.0 ## Note that this is for the softmax at the end of the head 
 nclusters: 100
 nhidden: 2048
 entropy_scale: 1.0

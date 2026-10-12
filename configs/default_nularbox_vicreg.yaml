@@ -43,7 +43,8 @@ enc_stem_channels: 64
 
 ## ---- optional contrastive clustering head ----
 clust_arch: "none"   # This controls whether there actually is one
-clust_temp: 0.5
+clust_temp: 0.5 ## This is used in the contrastive clustering loss
+head_temp: 1.0 ## Note that this is for the softmax at the end of the head
 nclusters: 20
 entropy_scale: 1.0
 instance_scale: 1.0
