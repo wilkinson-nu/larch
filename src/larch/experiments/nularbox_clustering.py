@@ -419,6 +419,7 @@ def build_parser():
     ## Clustering head
     parser.add_argument('--clust_arch', type=str)
     parser.add_argument('--clust_temp', type=float)
+    parser.add_argument('--head_temp', type=float)    
     parser.add_argument('--nhidden', type=int)
     parser.add_argument('--nclusters', type=int)
     parser.add_argument('--entropy_scale', type=float)
