@@ -15,7 +15,7 @@ from torch import nn
 
 ## Includes from my libraries for this project
 from larch.losses.ntxent import NTXentMerged, NTXentMergedMultiGPU
-from larch.losses.vicreg import VICRegLossDistributed
+from larch.losses.vicreg import VICRegLossDistributed, VICRegLossModDistributed
 from larch.losses.clustering import ClusteringLossMerged, ClusteringLossMergedMultiGPU
 from larch.models.resnet_encoder import get_encoder
 from larch.models.projection_head import get_projhead
@@ -103,6 +103,17 @@ def run_training(rank, local_rank, world_size, args):
         loss_fns["proj"] = VICRegLossDistributed(args.vicreg_sim_coeff,
                                                  args.vicreg_std_coeff,
                                                  args.vicreg_cov_coeff)
+    elif args.proj_loss == "vicregstrat":
+        print0(f"LOSS: VICRegStrat")
+        print0(f"      sim_coeff = {args.vicreg_sim_coeff}")
+        print0(f"      std_coeff = {args.vicreg_std_coeff}")
+        print0(f"      cov_coeff = {args.vicreg_cov_coeff}")
+        print0(f"      cov_coeff = {args.vicreg_strat_lambda}")        
+        loss_fns["proj"] = VICRegLossModDistributed(args.vicreg_sim_coeff,
+                                                    args.vicreg_std_coeff,
+                                                    args.vicreg_cov_coeff,
+                                                    strat_lambda=args.vicreg_strat_lambda,
+                                                    strat_chunks=world_size) 
     else:
         raise ValueError(f"Unknown projection head loss: {args.proj_loss}")
 
@@ -261,7 +272,7 @@ def run_training(rank, local_rank, world_size, args):
         # Iterate over batches of images with the dataloader
         t0 = time.time()
         first_batch_latency = None
-        for cat_bcoords, cat_bfeats, this_batch_size in train_loader:
+        for cat_bcoords, cat_bfeats, this_batch_size, strat_key in train_loader:
 
             if first_batch_latency is None:
                 first_batch_latency = time.time() - t0
@@ -296,7 +307,7 @@ def run_training(rank, local_rank, world_size, args):
             if norm_encoder: encoded_batch = torch.nn.functional.normalize(encoded_batch, p=2, dim=1)
 
             ## Deal with the projection loss
-            proj_batch = heads["proj"](encoded_batch)
+            proj_batch = heads["proj"](encoded_batch, strat_key)
             proj_loss, proj_loss_parts = loss_fns["proj"](proj_batch)
                 
             tot_loss = proj_loss
@@ -636,6 +647,7 @@ def build_parser():
     parser.add_argument('--vicreg_sim_coeff', type=float)
     parser.add_argument('--vicreg_std_coeff', type=float)
     parser.add_argument('--vicreg_cov_coeff', type=float)
+    parser.add_argument('--vicreg_strat_lambda', type=float)    
     
     ## kNN and linear probe monitoring options
     parser.add_argument('--monitor_nbank', type=int)
