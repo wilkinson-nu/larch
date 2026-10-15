@@ -143,7 +143,7 @@ def triple_ME_collate_fn(batch):
 
 
 def cat_ME_collate_fn(batch):
-    aug1_coords, aug1_feats, aug2_coords, aug2_feats, _, _ = zip(*batch)
+    aug1_coords, aug1_feats, aug2_coords, aug2_feats, raw_coords, _ = zip(*batch)
 
     coords_list = list(aug1_coords) + list(aug2_coords)
     feats_list  = list(aug1_feats)  + list(aug2_feats)
@@ -154,7 +154,11 @@ def cat_ME_collate_fn(batch):
     # Concatenate all lists
     cat_bfeats = torch.from_numpy(np.concatenate(feats_list, axis=0)).float()
 
-    return cat_bcoords, cat_bfeats, len(batch)*2
+    # Per-event key from the un-augmented event
+    n_hits = torch.tensor([len(c) for c in raw_coords], dtype=torch.float32)
+    strat_key = torch.log10(n_hits)
+    
+    return cat_bcoords, cat_bfeats, len(batch)*2, strat_key
 
 
 class single_2d_dataset_ME(Dataset):
