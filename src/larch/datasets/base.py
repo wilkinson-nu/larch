@@ -407,48 +407,27 @@ def solo_labelled_collate_fn(batch,
     bcoords = ME.utils.batched_coordinates(coords)
     bfeats = torch.from_numpy(np.concatenate(feats, axis=0)).float()
 
-    ## Old schema for backwards compatibility
-    if not isinstance(labels[0], Mapping):
+    blabels = collate_nested_labels(labels)
 
-        blabels = {name: torch.from_numpy(np.asarray([label[name] for label in labels]))
-            for name in labels[0].dtype.names}
-        
-        if derived_labels:
-            for name, function in derived_labels.items():
-                blabels[name] = function(blabels)
+    if derived_labels:
+        blabels["derived"] = {}
 
-        if label_clamp:
-            for name, clamp_value in label_clamp.items():
-                if name in blabels:
-                    blabels[name] = torch.clamp(
-                        blabels[name],
-                        min=0,
-                        max=clamp_value,
-                    )
+        for name, function in derived_labels.items():
+            blabels["derived"][name] = function(blabels)
 
-    else:
-        blabels = collate_nested_labels(labels)
+    if label_clamp:
+        for group_name, group_clamps in label_clamp.items():
+            if group_name not in blabels:
+                continue
 
-        ## New schema, future default
-        if derived_labels:
-            blabels["derived"] = {}
-
-            for name, function in derived_labels.items():
-                blabels["derived"][name] = function(blabels)
-
-        if label_clamp:
-            for group_name, group_clamps in label_clamp.items():
-                if group_name not in blabels:
+            for name, clamp_value in group_clamps.items():
+                if name not in blabels[group_name]:
                     continue
 
-                for name, clamp_value in group_clamps.items():
-                    if name not in blabels[group_name]:
-                        continue
-
-                    blabels[group_name][name] = torch.clamp(
-                        blabels[group_name][name],
-                        min=0,
-                        max=clamp_value,
-                    )
+                blabels[group_name][name] = torch.clamp(
+                    blabels[group_name][name],
+                    min=0,
+                    max=clamp_value,
+                )
 
     return bcoords, bfeats, blabels, len(batch)
