@@ -33,8 +33,9 @@ from larch.datasets.nularbox.targets import MULTIPLICITY_TARGETS, LABEL_GROUPS, 
 from larch.classification import SupervisedHead, supervised_loss, ClassificationMetrics
 
 ## kNN and linear probe monitoring
-from larch.probes import run_probes, log_probe_results
-
+from larch.evaluation.features import extract_features
+from larch.evaluation.linear import run_linear_probes, log_linear_results
+from larch.evaluation.knn import run_knn_probes, log_knn_results
 
 ## Utilities for multi-rank training
 from larch.distributed import setup_distributed_runtime, print0
@@ -352,22 +353,31 @@ def run_training(rank, local_rank, world_size, args):
         run_linear = args.linear_every > 0 and (epoch % args.linear_every == 0 or is_last_epoch)
 
         ## Run probes as desired
-        knn_results, linear_results = run_probes(encoder,
-                                                 bank_loader,
-                                                 query_loader,
-                                                 device,
-                                                 targets=MULTIPLICITY_TARGETS,
-                                                 label_groups=LABEL_GROUPS,
-                                                 rank=rank,
-                                                 run_knn=run_knn,
-                                                 run_linear=run_linear,
-                                                 knn_k=args.knn_k,
-                                                 knn_pca=args.knn_pca,
-                                                 linear_epochs=args.linear_epochs,
-                                                 linear_batch_size=args.linear_batch_size,
-                                                 linear_lr=args.linear_lr,
-                                                 seed=args.seed)
+## Run probes as desired
+        if run_knn or run_linear:
+            torch.cuda.synchronize(); pstart = time.time()
+
+            bank = extract_features(encoder, bank_loader, device)
+            query = extract_features(encoder, query_loader, device)
             
+            if rank == 0:
+                if run_knn:
+                    knn_results = run_knn_probes(bank, query, device,
+                                                 targets=MONITOR_CONFIG,
+                                                 label_groups=MONITOR_LABEL_GROUPS,
+                                                 knn_k=args.knn_k,
+                                                 knn_pca=args.knn_pca)
+                if run_linear:
+                    linear_results = run_linear_probes(bank, query, device,
+                                                       targets=MONITOR_CONFIG,
+                                                       label_groups=MONITOR_LABEL_GROUPS,
+                                                       linear_epochs=args.linear_epochs,
+                                                       linear_batch_size=args.linear_batch_size,
+                                                       linear_lr=args.linear_lr,
+                                                       seed=args.seed)
+            dist.barrier()
+            print0(f"Monitoring time taken: {time.time() - pstart:.2f}")
+
         ## Sort out the metrics (needs to be on all ranks due to collective ops)
         clf_metrics.reduce()
         metric_results = clf_metrics.compute()
@@ -417,7 +427,8 @@ def run_training(rank, local_rank, world_size, args):
                 log_scalar(writer, metrics, f"eigen/enc_{name}", value, epoch)
 
             ## Logs all of the kNN and linear probe results
-            log_probe_results(writer, metrics, knn_results, linear_results, epoch)
+            log_knn_results(writer, metrics, knn_results, epoch)
+            log_linear_results(writer, metrics, linear_results, epoch)
                 
             if scheduler: 
                 log_scalar(writer, metrics, 'train/lr', scheduler.get_last_lr()[0], epoch)

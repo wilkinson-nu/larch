@@ -32,7 +32,7 @@ from torch.utils.tensorboard import SummaryWriter
 from larch.datasets.nularbox.augmentations_2d import get_transform
 
 ## Cluster-specific metrics
-from larch.probes import extract_features
+from larch.evaluation.features import extract_features
 from larch.cluster_metrics import encoder_neighbours, run_cluster_monitoring
 
 ## Utilities for multi-rank training
@@ -133,13 +133,13 @@ def run_training(rank, local_rank, world_size, args, enc_state):
     ## Encoder is frozen, so extract features once, and then cache
     NBR_METRICS = ("cosine", "euclidean")
 
-    qry_f, _ = extract_features(encoder, query_loader, device)
+    qry = extract_features(encoder, query_loader, device)
     
     norm_encoder = bool(args.norm_encoder)
     monitor_feats = None
     monitor_nbrs = None
     if rank == 0:
-        monitor_feats = qry_f.float().to(device)
+        monitor_feats = qry["feats"].float().to(device)
         
         ## Calculate neighbours
         monitor_nbrs = {metric: encoder_neighbours(monitor_feats, k=args.monitor_k, metric=metric)
@@ -151,7 +151,7 @@ def run_training(rank, local_rank, world_size, args, enc_state):
         print0(f"Cached {monitor_feats.shape[0]} query events for cluster monitoring")
 
     ## Loaders are no longer needed
-    del qry_f, bank_loader, query_loader
+    del qry, bank_loader, query_loader
     torch.cuda.empty_cache()
 
     ## Keep track of assignments from the last iteration
