@@ -352,9 +352,18 @@ def collate_nested_labels(labels):
 
     for group in groups:
         records = [label[group] for label in labels]
-        dtype = records[0].dtype
-
-        if dtype.names is None:
+        first = records[0]
+        
+        ## Dict of per-event scalars (e.g. "reco")
+        if isinstance(first, Mapping):
+            blabels[group] = {
+                name: torch.from_numpy(np.asarray([r[name] for r in records]))
+                for name in first.keys()
+            }
+            continue
+        
+        dtype = getattr(first, "dtype", None)
+        if dtype is None or dtype.names is None:
             raise TypeError(f"Expected structured records for group '{group}', "
                             f"found dtype {dtype}")
 
