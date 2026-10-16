@@ -274,7 +274,7 @@ def run_training(rank, local_rank, world_size, args):
         # Iterate over batches of images with the dataloader
         t0 = time.time()
         first_batch_latency = None
-        for cat_bcoords, cat_bfeats, this_batch_size, strat_key in train_loader:
+        for cat_bcoords, cat_bfeats, this_batch_size, batch_labels in train_loader:
 
             if first_batch_latency is None:
                 first_batch_latency = time.time() - t0
@@ -310,6 +310,7 @@ def run_training(rank, local_rank, world_size, args):
 
             ## Deal with the projection loss
             proj_batch = heads["proj"](encoded_batch)
+            strat_key = torch.log10(batch_labels["nhits"].clamp_min(1e-6))
             proj_loss, proj_loss_parts = loss_fns["proj"](proj_batch, strat_key)
                 
             tot_loss = proj_loss
