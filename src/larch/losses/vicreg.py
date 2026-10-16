@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from larch.distributed import GatherLayer
+import torch.distributed as dist
 
 class VICRegLossDistributed(nn.Module):
     def __init__(
@@ -97,7 +98,7 @@ class VICRegLossModDistributed(nn.Module):
         cov = xc.T @ xc / max(n - 1, 1)
         return self.off_diagonal(cov).pow(2).sum() / d
 
-    def _gather_no_grad(x):
+    def _gather_no_grad(self, x):
         if not (dist.is_available() and dist.is_initialized()): return x
         out = [torch.empty_like(x) for _ in range(dist.get_world_size())]
         dist.all_gather(out, x.contiguous())
@@ -141,7 +142,7 @@ class VICRegLossModDistributed(nn.Module):
         ## Now deal with the stratified sub-batches
         lam = self.strat_lambda
         assert strat_key.shape[0] == batch_size
-        key_all = self.gather_no_grad(strat_key.detach().float().to(emb_cat.device))
+        key_all = self._gather_no_grad(strat_key.detach().float().to(emb_cat.device))
 
         ## Calculate the chunked variance
         var_chunk, var_per_chunk, key_std = self._chunked_terms(z1_all, z2_all, key_all)
@@ -156,13 +157,18 @@ class VICRegLossModDistributed(nn.Module):
                 + self.std_coeff * variance_loss
                 + self.cov_coeff * covariance_loss)
 
-        return loss, {
+        logs = {
             "invariance": invariance_loss.detach(),
-            "variance_global": var_global.detach(),
-            "covariance": covariance_loss.detach(),
+	    "variance_global": var_global.detach(),
+	    "covariance": covariance_loss.detach(),
             "variance": variance_loss.detach(),
             "variance_chunked": var_chunk.detach(),
-            "variance_gap": (var_chunk - var_global).detach(),  # count-reliance signal
-            "variance_per_chunk": var_per_chunk.detach(),       # (K,), low -> high key
-            "key_std_per_chunk": key_std.detach(),              # chunk width in key units
+            "variance_gap": (var_chunk - var_global).detach(),
         }
+
+        width = len(str(self.strat_chunks - 1))
+        for i in range(self.strat_chunks):
+            logs[f"variance_chunk_{i:0{width}d}"] = var_per_chunk[i].detach()
+            logs[f"key_std_chunk_{i:0{width}d}"] = key_std[i].detach()
+        
+        return loss, logs

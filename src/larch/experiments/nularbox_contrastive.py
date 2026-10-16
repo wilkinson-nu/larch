@@ -108,7 +108,7 @@ def run_training(rank, local_rank, world_size, args):
         print0(f"      sim_coeff = {args.vicreg_sim_coeff}")
         print0(f"      std_coeff = {args.vicreg_std_coeff}")
         print0(f"      cov_coeff = {args.vicreg_cov_coeff}")
-        print0(f"      cov_coeff = {args.vicreg_strat_lambda}")        
+        print0(f"   strat_lambda = {args.vicreg_strat_lambda}")        
         loss_fns["proj"] = VICRegLossModDistributed(args.vicreg_sim_coeff,
                                                     args.vicreg_std_coeff,
                                                     args.vicreg_cov_coeff,
@@ -307,8 +307,8 @@ def run_training(rank, local_rank, world_size, args):
             if norm_encoder: encoded_batch = torch.nn.functional.normalize(encoded_batch, p=2, dim=1)
 
             ## Deal with the projection loss
-            proj_batch = heads["proj"](encoded_batch, strat_key)
-            proj_loss, proj_loss_parts = loss_fns["proj"](proj_batch)
+            proj_batch = heads["proj"](encoded_batch)
+            proj_loss, proj_loss_parts = loss_fns["proj"](proj_batch, strat_key)
                 
             tot_loss = proj_loss
             losses_tensor["proj"] += proj_loss.detach()
@@ -628,6 +628,7 @@ def build_parser():
     ## (Optional) clustering head
     parser.add_argument('--clust_arch', type=str)
     parser.add_argument('--clust_temp', type=float)
+    parser.add_argument('--head_temp', type=float)
     parser.add_argument('--nclusters', type=int)
     parser.add_argument('--entropy_scale', type=float)
     parser.add_argument('--instance_scale', type=float)
