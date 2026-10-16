@@ -187,9 +187,9 @@ class VICRegLossModDistributed(nn.Module):
             "variance_gap_pooled": (var_pooled - var_global).detach(),
         }
 
+        ## Track what is happening for each chunk
         width = len(str(self.strat_chunks - 1))
         for i in range(self.strat_chunks):
             logs[f"variance_chunk_{i:0{width}d}"] = var_per_chunk[i].detach()
-            logs[f"key_std_chunk_{i:0{width}d}"] = key_std[i].detach()
         
         return loss, logs
