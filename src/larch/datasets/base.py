@@ -9,6 +9,14 @@ import torch
 from collections import OrderedDict
 from collections.abc import Mapping
 
+## A slightly temporary hack to get high-level event info in
+def reco_summaries(coords, feats):
+    return {
+        "nhits": len(coords),
+        "qmax":  float(feats.max()),
+        "qsum":  float(feats.sum()),
+    }
+
 class paired_2d_dataset_ME(Dataset):
 
     def __init__(self,
@@ -123,27 +131,30 @@ class paired_2d_dataset_ME(Dataset):
             aug1_coords, aug1_feats = self.apply_aug_with_retry(raw_coords, raw_feats)
             aug2_coords, aug2_feats = self.apply_aug_with_retry(raw_coords, raw_feats)
 
-        return aug1_coords, aug1_feats, aug2_coords, aug2_feats, nom_coords, nom_feats
+        ## Finally, save some raw labels
+        raw_labels = reco_summaries(raw_coords, raw_feats)
+            
+        return aug1_coords, aug1_feats, aug2_coords, aug2_feats, nom_coords, nom_feats, raw_labels
 
     
 def triple_ME_collate_fn(batch):
-    aug1_coords, aug1_feats, aug2_coords, aug2_feats, raw_coords, raw_feats = zip(*batch)
+    aug1_coords, aug1_feats, aug2_coords, aug2_feats, nom_coords, nom_feats,_ = zip(*batch)
 
     # Create batched coordinates for the SparseTensor input
     aug1_bcoords = ME.utils.batched_coordinates(aug1_coords)
     aug2_bcoords = ME.utils.batched_coordinates(aug2_coords)
-    raw_bcoords  = ME.utils.batched_coordinates(raw_coords)
+    nom_bcoords  = ME.utils.batched_coordinates(nom_coords)
 
     # Concatenate all lists
     aug1_bfeats = torch.from_numpy(np.concatenate(aug1_feats, 0)).float()
     aug2_bfeats = torch.from_numpy(np.concatenate(aug2_feats, 0)).float()
-    raw_bfeats  = torch.from_numpy(np.concatenate(raw_feats, 0)).float()
+    nom_bfeats  = torch.from_numpy(np.concatenate(nom_feats, 0)).float()
 
-    return aug1_bcoords, aug1_bfeats, aug2_bcoords, aug2_bfeats, raw_bcoords, raw_bfeats
+    return aug1_bcoords, aug1_bfeats, aug2_bcoords, aug2_bfeats, nom_bcoords, nom_bfeats
 
 
 def cat_ME_collate_fn(batch):
-    aug1_coords, aug1_feats, aug2_coords, aug2_feats, raw_coords, _ = zip(*batch)
+    aug1_coords, aug1_feats, aug2_coords, aug2_feats, _, _, labels = zip(*batch)
 
     coords_list = list(aug1_coords) + list(aug2_coords)
     feats_list  = list(aug1_feats)  + list(aug2_feats)
@@ -154,11 +165,13 @@ def cat_ME_collate_fn(batch):
     # Concatenate all lists
     cat_bfeats = torch.from_numpy(np.concatenate(feats_list, axis=0)).float()
 
-    # Per-event key from the un-augmented event
-    n_hits = torch.tensor([len(c) for c in raw_coords], dtype=torch.float32)
-    strat_key = torch.log10(n_hits)
+    # Batch the raw labels
+    batch_labels = {
+        key: torch.from_numpy(np.array([lab[key] for lab in labels], dtype=np.float32))
+        for key in labels[0]
+    }
     
-    return cat_bcoords, cat_bfeats, len(batch)*2, strat_key
+    return cat_bcoords, cat_bfeats, len(batch)*2, batch_labels
 
 
 class single_2d_dataset_ME(Dataset):
@@ -174,7 +187,6 @@ class single_2d_dataset_ME(Dataset):
         self.infile_dir = os.path.expandvars(infile_dir)
         self.hdf5_files = sorted(glob(os.path.join(self.infile_dir, '*.h5')))
         self.file_indices = []
-        self.file_schemas = []
         self.transform = transform
         self.max_events = max_events
         self.return_metadata = return_metadata
@@ -196,22 +208,6 @@ class single_2d_dataset_ME(Dataset):
         if self.max_events and max_events < self.length:
             self.length = self.max_events
 
-    @staticmethod
-    def _detect_file_schema(h5file):
-        has_old = "labels" in h5file
-
-        new_datasets = {
-            "particle_truth",
-            "particle_visible",
-            "event_labels",
-        }
-        has_new = new_datasets.issubset(h5file.keys())
-
-        ## Decide what schema was used
-        if has_new: return "new"
-        if has_old: return "old"
-        raise RuntimeError(f"File {h5file.filename!r} is missing labels")
-
             
     def create_file_indices(self):
         cumulative_size = 0
@@ -219,19 +215,12 @@ class single_2d_dataset_ME(Dataset):
         for file in self.hdf5_files:
             self.file_indices.append(cumulative_size)
             with h5py.File(file, 'r', libver='latest') as f:
-                schema = self._detect_file_schema(f)
-                self.file_schemas.append(schema)
                 cumulative_size += f.attrs['N']
         self.file_indices.append(cumulative_size)
         self.length = cumulative_size
 
         if cumulative_size == 0:
             raise RuntimeError(f"No files in {self.infile_dir}!")
-        
-        schemas = set(self.file_schemas)
-        if len(schemas) != 1:
-            raise RuntimeError("Multiple labeling schemes found")
-        self.label_schema = next(iter(schemas))
 
 
     def _get_file(self, file_index):
@@ -254,12 +243,9 @@ class single_2d_dataset_ME(Dataset):
                              f"{self.proj}_row",
                              f"{self.proj}_col"]
 
-        if self.label_schema == "old":
-            label_datasets = ["labels"]
-        else:
-            label_datasets = ["particle_truth",
-                              "particle_visible",
-                              "event_labels"]
+        label_datasets = ["particle_truth",
+                          "particle_visible",
+                          "event_labels"]
             
         dataset_names += ["event_id",
                           *label_datasets]
@@ -317,23 +303,23 @@ class single_2d_dataset_ME(Dataset):
         end = int(offsets[this_idx + 1])
 
         if self.proj == "xyz":
-            feats = dsets["xyz_data"][start:end].reshape(-1, 1)
-            coords = dsets["xyz_coords"][start:end]
+            raw_feats = dsets["xyz_data"][start:end].reshape(-1, 1)
+            raw_coords = dsets["xyz_coords"][start:end]
         else:
-            feats = dsets[f"{self.proj}_data"][start:end].reshape(-1, 1)
+            raw_feats = dsets[f"{self.proj}_data"][start:end].reshape(-1, 1)
             row = dsets[f"{self.proj}_row"][start:end]
             col = dsets[f"{self.proj}_col"][start:end]
-            coords = np.column_stack((row, col))
+            raw_coords = np.column_stack((row, col))
             
-        coords, feats = self.apply_aug_with_retry(coords, feats)
+        coords, feats = self.apply_aug_with_retry(raw_coords, raw_feats)
 
-        if self.label_schema == "old":
-            labels = dsets["labels"][this_idx]
-        else:
-            labels = {"particle_truth": dsets["particle_truth"][this_idx],
-                      "particle_visible": dsets["particle_visible"][this_idx],
-                      "event": dsets["event_labels"][this_idx],}
-
+        labels = {
+            "particle_truth": dsets["particle_truth"][this_idx],
+            "particle_visible": dsets["particle_visible"][this_idx],
+            "event": dsets["event_labels"][this_idx],
+            "reco": reco_summaries(raw_coords, raw_feats),
+        }
+        
         if self.return_metadata:
             filename = os.path.basename(self.hdf5_files[file_index])
             event_id = int(dsets["event_id"][this_idx])
