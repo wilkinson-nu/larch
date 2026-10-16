@@ -34,6 +34,7 @@ PARTICLE_STACK_DTYPE = np.dtype([
 EVENT_LABEL_DTYPE = np.dtype([
 
     ## Interaction truth
+    ## TODO add Q2? W?
     ("cc",        np.bool_),
     ("enu",       np.float32),
     ("q0",        np.float32),
