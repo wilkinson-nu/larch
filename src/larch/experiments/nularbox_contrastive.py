@@ -40,7 +40,7 @@ from larch.datasets.nularbox.targets import MULTIPLICITY_TARGETS, LABEL_GROUPS, 
 from larch.evaluation.features import extract_features
 from larch.evaluation.linear import run_linear_probes, log_linear_results
 from larch.evaluation.knn import run_knn_probes, log_knn_results
-from larch.evaluation.knn import run_regression_probes, log_regression_results
+from larch.evaluation.regression import run_regression_probes, log_regression_results
 
 ## Utilities for multi-rank training
 from larch.distributed import setup_distributed_runtime, print0
