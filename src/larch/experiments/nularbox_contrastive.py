@@ -37,7 +37,10 @@ from larch.datasets.nularbox.augmentations_2d import get_transform
 
 ## Supervised for kNN monitoring and linear probes
 from larch.datasets.nularbox.targets import MULTIPLICITY_TARGETS, LABEL_GROUPS, label_clamp
-from larch.probes import run_probes, log_probe_results
+from larch.evaluation.features import extract_features
+from larch.evaluation.linear import run_linear_probes, log_linear_results
+from larch.evaluation.knn import run_knn_probes, log_knn_results
+from larch.evaluation.knn import run_regression_probes, log_regression_results
 
 ## Utilities for multi-rank training
 from larch.distributed import setup_distributed_runtime, print0
@@ -183,6 +186,13 @@ def run_training(rank, local_rank, world_size, args):
         seed=args.seed,
     )
 
+    ## Additional regression targets
+    MONITOR_REGRESSION = {
+        "reco":  {"nhits": "log10", "qsum": "log10", "qmax": "log10"},
+        "event": {"enu": "log10", "q0": "log10", "edep_20mm": "log10"},
+    }
+    MONITOR_OCC_BASIS = (("reco", "nhits"), ("reco", "qsum"))
+    
     ## Make the log directory
     log_dir = Path(args.run_dir) / args.log
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -433,23 +443,35 @@ def run_training(rank, local_rank, world_size, args):
         is_last_epoch = (epoch == nepoch - 1)
         run_knn = args.knn_every > 0 and (epoch % args.knn_every == 0 or is_last_epoch)
         run_linear = args.linear_every > 0 and (epoch % args.linear_every == 0 or is_last_epoch)
-        
+
         ## Run probes as desired
-        knn_results, linear_results = run_probes(encoder,
-                                                 bank_loader,
-                                                 query_loader,
-                                                 device,
+        if run_knn or run_linear:
+            torch.cuda.synchronize(); pstart = time.time()
+
+            bank = extract_features(encoder, bank_loader, device)
+            query = extract_features(encoder, query_loader, device)
+            
+            if rank == 0:
+                if run_knn:
+                    knn_results = run_knn_probes(bank, query, device,
                                                  targets=MONITOR_CONFIG,
                                                  label_groups=MONITOR_LABEL_GROUPS,
-                                                 rank=rank,
-                                                 run_knn=run_knn,
-                                                 run_linear=run_linear,
                                                  knn_k=args.knn_k,
-                                                 knn_pca=args.knn_pca,
-                                                 linear_epochs=args.linear_epochs,
-                                                 linear_batch_size=args.linear_batch_size,
-                                                 linear_lr=args.linear_lr,
-                                                 seed=args.seed)
+                                                 knn_pca=args.knn_pca)
+                if run_linear:
+                    linear_results = run_linear_probes(bank, query, device,
+                                                       targets=MONITOR_CONFIG,
+                                                       label_groups=MONITOR_LABEL_GROUPS,
+                                                       linear_epochs=args.linear_epochs,
+                                                       linear_batch_size=args.linear_batch_size,
+                                                       linear_lr=args.linear_lr,
+                                                       seed=args.seed)
+                    regression_results = run_regression_probes(bank, query,
+                                                               MONITOR_REGRESSION,
+                                                               occ_basis=MONITOR_OCC_BASIS,
+                                                               seed=args.seed)
+            dist.barrier()
+            print0(f"Monitoring time taken: {time.time() - pstart:.2f}")
 
         ## Reporting, but only for rank 0
         if rank==0:
@@ -505,8 +527,10 @@ def run_training(rank, local_rank, world_size, args):
                     )
 
             ## Logs all of the kNN and linear probe results
-            log_probe_results(writer, metrics, knn_results, linear_results, epoch)
-                    
+            log_knn_results(writer, metrics, knn_results, epoch)
+            log_linear_results(writer, metrics, linear_results, epoch)
+            log_regression_results(writer, metrics, regression_results, epoch)
+            
             if scheduler: 
                 log_scalar(writer, metrics, 'train/lr', scheduler.get_last_lr()[0], epoch)
             log_scalar(writer, metrics, 'train/weight_decay', this_wd, epoch)
