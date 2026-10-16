@@ -25,32 +25,37 @@ def load_checkpoint(state_file_name):
     args = argparse.Namespace(**checkpoint['args'])
     return checkpoint, args
 
+HEAD_BUILDERS = {
+    "proj":  get_projhead,
+    "clust": get_clusthead,
+}
+
 def get_models_from_checkpoint(state_file_name):
 
     ## Expand paths (but fail on any conflicts)
-    state_file_name = resolve_path(state_file_name)
-    
+    state_file_name = resolve_path(state_file_name)    
     checkpoint, args = load_checkpoint(state_file_name)
 
     ## Get the models
     encoder = get_encoder(args)
     encoder.load_state_dict(checkpoint['encoder_state_dict'])
+    nchan = encoder.get_nchan()
 
-    ## Dictionary of heads and load saved model parameters
+    ## Fail loudly on head types this function doesn't know how to build
+    saved_heads = {k.removesuffix("_head_state_dict")
+                   for k in checkpoint if k.endswith("_head_state_dict")}
+    unknown = saved_heads - HEAD_BUILDERS.keys()
+    if unknown:
+        raise ValueError(f"{state_file_name} contains unknown heads: {sorted(unknown)}")
+
+    ## Load whichever heads were saved
     heads = {}
+    for name in sorted(saved_heads):
+        heads[name] = HEAD_BUILDERS[name](nchan, args)
+        heads[name].load_state_dict(checkpoint[f"{name}_head_state_dict"])
 
-    heads["proj"] = get_projhead(encoder.get_nchan(), args)
-    heads["proj"] .load_state_dict(checkpoint['proj_head_state_dict'])
-
-    ## Optionally load the clustering head
-    if hasattr(args, 'clust_arch'):
-        if args.clust_arch != "none":
-            heads["clust"] = get_clusthead(encoder.get_nchan(), args)
-            heads["clust"] .load_state_dict(checkpoint['clust_head_state_dict']) 
-
-    print("Loaded models from:", state_file_name)
+    print(f"Loaded encoder + heads {sorted(heads)} from: {state_file_name}")
     return encoder, heads, args
-
 
 def get_encoder_from_checkpoint(state_file_name):
     checkpoint, args = load_checkpoint(state_file_name)
