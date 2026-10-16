@@ -158,11 +158,11 @@ def run_knn_probes(bank,
     return knn_results
 
 def log_knn_results(writer, metrics, knn_results, iteration):
-    if knn_results is not None:
-        for dist_metric, group_results in knn_results.items():
-            for group, target_results in group_results.items():
-                for part, result in target_results.items():
-                    for name, value in result.items():
-                        log_scalar(writer, metrics,
-                                   f"knn_{group}/{dist_metric}/{part}_{name}",
-                                   value, iteration)
+    if not knn_results: return
+    for dist_metric, group_results in knn_results.items():
+        for group, target_results in group_results.items():
+            for part, result in target_results.items():
+                for name, value in result.items():
+                    log_scalar(writer, metrics,
+                               f"knn_{group}/{dist_metric}/{part}_{name}",
+                               value, iteration)

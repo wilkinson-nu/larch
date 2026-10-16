@@ -145,11 +145,10 @@ def run_linear_probes(bank,
 
 
 def log_linear_results(writer, metrics, linear_results, iteration):
-
-    if linear_results is not None:
-        for group, target_results in linear_results.items():
-            for part, result in target_results.items():
-                for name, value in result.items():
-                    log_scalar(writer, metrics,
-                               f"linear_{group}/{part}_{name}",
-                               value, iteration)
+    if not linear_results: return
+    for group, target_results in linear_results.items():
+        for part, result in target_results.items():
+            for name, value in result.items():
+                log_scalar(writer, metrics,
+                           f"linear_{group}/{part}_{name}",
+                           value, iteration)
