@@ -108,12 +108,14 @@ def run_training(rank, local_rank, world_size, args):
         print0(f"      sim_coeff = {args.vicreg_sim_coeff}")
         print0(f"      std_coeff = {args.vicreg_std_coeff}")
         print0(f"      cov_coeff = {args.vicreg_cov_coeff}")
-        print0(f"   strat_lambda = {args.vicreg_strat_lambda}")        
+        print0(f"   strat_lambda = {args.vicreg_strat_lambda}")
+        print0(f"     strat_mode = {args.vicreg_strat_mode}")
         loss_fns["proj"] = VICRegLossModDistributed(args.vicreg_sim_coeff,
                                                     args.vicreg_std_coeff,
                                                     args.vicreg_cov_coeff,
                                                     strat_lambda=args.vicreg_strat_lambda,
-                                                    strat_chunks=world_size) 
+                                                    strat_chunks=world_size*2,
+                                                    strat_mode=args.vicreg_strat_mode) 
     else:
         raise ValueError(f"Unknown projection head loss: {args.proj_loss}")
 
@@ -442,7 +444,7 @@ def run_training(rank, local_rank, world_size, args):
                                                  run_knn=run_knn,
                                                  run_linear=run_linear,
                                                  knn_k=args.knn_k,
-                                                 knn_pca=args.knn_k,
+                                                 knn_pca=args.knn_pca,
                                                  linear_epochs=args.linear_epochs,
                                                  linear_batch_size=args.linear_batch_size,
                                                  linear_lr=args.linear_lr,
@@ -649,6 +651,7 @@ def build_parser():
     parser.add_argument('--vicreg_std_coeff', type=float)
     parser.add_argument('--vicreg_cov_coeff', type=float)
     parser.add_argument('--vicreg_strat_lambda', type=float)    
+    parser.add_argument('--vicreg_strat_mode', type=str)
     
     ## kNN and linear probe monitoring options
     parser.add_argument('--monitor_nbank', type=int)
