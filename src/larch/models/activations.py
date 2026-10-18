@@ -1,5 +1,6 @@
 from torch import nn
 import MinkowskiEngine as ME
+from functools import partial
 
 def get_act_from_string_ME(act_name):
     if act_name == "relu":
@@ -22,7 +23,7 @@ def get_act_from_string(act_name):
     if act_name == "relu":
         return nn.ReLU
     if act_name == "leakyrelu":
-        return nn.LeakyReLU
+        return partial(nn.LeakyReLU, negative_slope=0.1) ## Temporary hack...
     if act_name == "gelu":
         return nn.GELU
     if act_name in ["silu", "swish"]:

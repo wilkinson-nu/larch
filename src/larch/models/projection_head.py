@@ -31,7 +31,7 @@ class ProjectionHeadTwoLayer(nn.Module):
                  hidden_act_fn : object = nn.ReLU,
                  apply_bn : bool = False,
                  init_bn : bool = False,
-                 final_bn : bool = True):
+                 final_bn : bool = False):
         super().__init__()
 
         self.nchan = nchan
@@ -64,9 +64,13 @@ class ProjectionHeadTwoLayer(nn.Module):
 
     
     def initialize_weights(self):
+        act = self.hidden_act_fn()
+        slope = getattr(act, "negative_slope", 0.0)
+        nl = "leaky_relu" if slope > 0 else "relu"
+
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity=nl, a=slope)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
             elif isinstance(m, (nn.BatchNorm1d, nn.SyncBatchNorm)):
@@ -105,7 +109,7 @@ class ProjectionHeadThreeLayer(nn.Module):
                  hidden_act_fn : object = nn.ReLU,
                  apply_bn : bool = False,
                  init_bn : bool = False,
-                 final_bn : bool = True):
+                 final_bn : bool = False):
         super().__init__()
 
 
@@ -144,9 +148,14 @@ class ProjectionHeadThreeLayer(nn.Module):
         
 
     def initialize_weights(self):
+
+        act = self.hidden_act_fn()
+        slope = getattr(act, "negative_slope", 0.0)
+        nl = "leaky_relu" if slope > 0 else "relu"
+
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity=nl, a=slope)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
             elif isinstance(m, (nn.BatchNorm1d, nn.SyncBatchNorm)):
