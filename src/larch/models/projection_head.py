@@ -192,7 +192,7 @@ class ProjectionHeadThreeLayer(nn.Module):
         
         
 def get_projhead(nchan, args):
-    hidden_act_fn = get_act_from_string(args.enc_act)
+    hidden_act_fn = get_act_from_string(args.proj_act)
     
     if args.proj_arch in ["logits", "two"]:
         proj_head = ProjectionHeadTwoLayer(nchan, args.latent, args.nhidden, hidden_act_fn,
