@@ -60,6 +60,7 @@ nhidden: 4096
 ## ---- projection head loss ----
 proj_loss: vicreg
 proj_temp: 0.5             # TODO: rename to simclr_temp
+proj_act: leakyrelu
 vicreg_sim_coeff: 25.0
 vicreg_std_coeff: 25.0
 vicreg_cov_coeff: 1.0

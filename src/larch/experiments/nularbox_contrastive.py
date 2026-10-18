@@ -668,6 +668,7 @@ def build_parser():
     parser.add_argument('--proj_arch', type=str)
     parser.add_argument('--proj_init_bn', type=int, choices=[0,1])
     parser.add_argument('--proj_final_bn', type=int, choices=[0,1])
+    parser.add_argument('--proj_act', type=str)
     parser.add_argument('--latent', type=int)
     parser.add_argument('--nhidden', type=int)
 
