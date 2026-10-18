@@ -52,6 +52,11 @@ class LARS(torch.optim.Optimizer):
                     continue
 
                 update = p.grad
+
+                ## Weight decay, BEFORE getting the update norm
+                if not lars_exclude and weight_decay != 0.0:
+                    update = update.add(p, alpha=weight_decay)
+                                                            
                 update_norm = torch.norm(update)
                 weight_norm = torch.norm(p)
                 
@@ -59,10 +64,6 @@ class LARS(torch.optim.Optimizer):
                 trust_ratio = torch.ones_like(weight_norm)
                 if not lars_exclude:
                     
-                    # Coupled weight decay, included before LARS adaptation.
-                    if weight_decay != 0.0:
-                        update = update.add(p, alpha=weight_decay)
-
                     # A trust ratio of one is the fallback for zero-norm
                     # weights or updates, allowing zero-initialized tensors
                     # to begin learning.
