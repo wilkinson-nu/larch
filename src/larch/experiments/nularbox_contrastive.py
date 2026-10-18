@@ -214,7 +214,7 @@ def run_training(rank, local_rank, world_size, args):
 
     ## Sort out the optimizer (one for each GPU...)
     nstep_total = nbatches*args.nepoch
-    optimizer, scheduler = get_opt_and_sched(args, encoder, heads, nstep_total, world_size, print_debug=False)
+    optimizer, scheduler = get_opt_and_sched(args, encoder, heads, nstep_total, world_size, print_debug=True)
     
     ## Set up metrics
     metrics = defaultdict(list)
@@ -544,8 +544,11 @@ def run_training(rank, local_rank, world_size, args):
             print0(f"Time taken: {(time.time()-tstart):.2f}")
             
         ## For checkpointing
-        #if rank==0 and epoch%25 == 0 and epoch != 0:
-        #    save_checkpoint(encoder, heads, optimizer, scheduler, state_file+".check"+str(epoch), epoch, metrics, args)
+        if rank==0 and epoch%5 == 0 and epoch != 0:
+            ckpt_file = state_file.with_name(f"{state_file.name}.check{epoch:03d}")
+            ## For now, don't save the optimizer state to keep things small
+            save_checkpoint(encoder, heads, None, None, ckpt_file, epoch, metrics, args)
+            
 
         ## Add per GPU logging
         allocated_gb = torch.tensor(torch.cuda.memory_allocated() / 1e9, device=device)
