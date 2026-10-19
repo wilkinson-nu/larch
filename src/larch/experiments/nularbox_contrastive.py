@@ -544,7 +544,7 @@ def run_training(rank, local_rank, world_size, args):
             print0(f"Time taken: {(time.time()-tstart):.2f}")
             
         ## For checkpointing
-        if rank==0 and epoch%5 == 0 and epoch != 0:
+        if rank==0 and epoch%args.checkpoint_every == 0 and epoch != 0 and args.checkpoint_every > 0:
             ckpt_file = state_file.with_name(f"{state_file.name}.check{epoch:03d}")
             ## For now, don't save the optimizer state to keep things small
             save_checkpoint(encoder, heads, None, None, ckpt_file, epoch, metrics, args)
@@ -693,10 +693,11 @@ def build_parser():
     parser.add_argument("--linear_batch_size", type=int)
     parser.add_argument("--linear_lr", type=float)
     
-    ## Optional profiler
+    ## Optional profiler/debugging
     parser.add_argument('--run_profiler', type=int, choices=[0,1])
     parser.add_argument('--extra_log_rate', type=int)
-
+    parser.add_argument('--checkpoint_every', type=int)
+    
     return parser
 
 def main(argv=None):

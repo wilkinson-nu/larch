@@ -81,3 +81,4 @@ linear_lr: 0.01
 ## ---- profiling / logging ----
 run_profiler: 0
 extra_log_rate: -1
+checkpoint_every: -1
