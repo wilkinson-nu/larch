@@ -45,13 +45,15 @@ def save_checkpoint(encoder, heads, optimizer, scheduler, state_file_name, itera
     state_dict = {
         'epoch': iteration,
         'encoder_state_dict': unwrap(encoder).state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
         'rng_state': torch.get_rng_state(),
         'cuda_rng_state': torch.cuda.get_rng_state_all(),
         'metrics': dict(metrics),
         'args':vars(args)
     }
 
+    if optimizer is not None:
+        state_dict['optimizer_state_dict'] = optimizer.state_dict()
+    
     ## Save a scheduler if we have one
     if scheduler is not None:
         state_dict['scheduler_state_dict'] = scheduler.state_dict()
