@@ -70,7 +70,7 @@ def ridge_fit_eval(Xb, yb, Xq, yq, *, rel_alphas=REL_ALPHAS, val_frac=0.2, seed=
         "r2": r2.item(),
         "rmse": resid.pow(2).mean().sqrt().item(),   # in transformed units
         "log10_rel_alpha": math.log10(rel_alphas[best]),
-        "alpha_at_edge": float(best in (0, len(rel_alphas) - 1)),
+        #"alpha_at_edge": float(best in (0, len(rel_alphas) - 1)),
     }
 
 
@@ -133,7 +133,7 @@ def run_regression_probes(bank,
                 continue
 
             res = ridge_fit_eval(Fb[mb], yb[mb], Fq[mq], yq[mq], seed=seed)
-            res["frac_valid"] = mq.double().mean().item()
+            # res["frac_valid"] = mq.double().mean().item()
 
             ## Partial R^2: what h adds beyond the occupancy basis
             if occ_basis and (group, name) not in occ_basis:
@@ -141,8 +141,8 @@ def run_regression_probes(bank,
                 r_hb = ridge_fit_eval(torch.cat([Fb[mb], Bb[mb]], dim=1), yb[mb],
                                       torch.cat([Fq[mq], Bq[mq]], dim=1), yq[mq],
                                       seed=seed)
-                res["r2_basis"] = r_b["r2"]
-                res["r2_with_basis"] = r_hb["r2"]
+                # res["r2_basis"] = r_b["r2"]
+                # res["r2_with_basis"] = r_hb["r2"]
                 res["partial_r2"] = (r_hb["r2"] - r_b["r2"]) / max(1.0 - r_b["r2"], 1e-12)
 
             results[f"{group}_{name}"] = res
