@@ -39,7 +39,7 @@ def get_opt_and_sched(args, encoder, heads, total_steps, world_size, print_debug
             trust_coef=args.lars_trust_coeff,
         )
 
-        warmup_steps = int(0.05 * total_steps)
+        warmup_steps = min(1000, int(0.05 * total_steps))
         scheduler = LARS_LRScheduler(optimizer, warmup_steps, total_steps, lr_max=corr_lr, lr_min=corr_lr*1e-3)
 
     ## Default to adam
