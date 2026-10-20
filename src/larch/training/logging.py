@@ -1,4 +1,8 @@
+from collections import defaultdict
+import math
+
 import torch
+import torch.nn as nn
 
 ## A simply logging utility
 def log_scalar(writer, metrics, name, value, step):
@@ -79,7 +83,7 @@ def log_weight_norm(module, tag, writer, iteration):
 
 
 ## Magic function to deal with the uninitialised gammas in BNs at the end of a residual  block
-def _residual_ids(module):
+def _get_residual_gamma_ids(module):
     get = getattr(module, "residual_gammas", None)
     return {id(p) for p in get()} if callable(get) else set()
 
@@ -120,7 +124,7 @@ def log_weight_norms(module, tag, writer, iteration, near_zero_gamma=0.05):
     by_stage = defaultdict(float)                   # e.g. "layer4"
     gamma_counts = defaultdict(lambda: [0, 0, 0])   # negative, near zero, total
 
-    residual_ids = {id(g) for g in residual_gammas(module)}
+    residual_ids = {id(g) for g in _get_residual_gamma_ids(module)}
     for param, labels in param_labels(module, residual_ids=residual_ids):
         sq_norm = param.detach().float().pow(2).sum().item()
         by_type[f"{labels['kind']}/{labels['role']}"] += sq_norm
@@ -135,9 +139,9 @@ def log_weight_norms(module, tag, writer, iteration, near_zero_gamma=0.05):
             counts[2] += gamma.numel()
 
     for category, sq_norm in by_type.items():
-        writer.add_scalar(f"weights/${tag}/type/{category}", math.sqrt(sq_norm), iteration)
+        writer.add_scalar(f"weights/{tag}/{category}", math.sqrt(sq_norm), iteration)
     for category, sq_norm in by_stage.items():
-        writer.add_scalar(f"weights/${tag}/stage/{category}", math.sqrt(sq_norm), iteration)
+        writer.add_scalar(f"weights/{category}", math.sqrt(sq_norm), iteration)
     for category, (negative, near_zero, total) in gamma_counts.items():
-        writer.add_scalar(f"bn/${tag}/{category}/frac_gamma_negative", negative / total, iteration)
-        writer.add_scalar(f"bn/${tag}/{category}/frac_gamma_near_zero", near_zero / total, iteration)
+        writer.add_scalar(f"bn/{category}/frac_gamma_negative", negative / total, iteration)
+        writer.add_scalar(f"bn/{category}/frac_gamma_near_zero", near_zero / total, iteration)
