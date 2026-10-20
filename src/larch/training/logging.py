@@ -148,7 +148,7 @@ def log_weight_norms(module, tag, writer, iteration, near_zero_gamma=0.05):
 
 
 @torch.no_grad()
-def log_lars_diagnostics(optimizer, modules, writer, global_iter):
+def log_lars_diagnostics(optimizer, modules, writer, global_iter, steps_per_epoch=None):
     labels_by_id = {}
     for tag, module in modules.items():
         residual_ids = _get_residual_gamma_ids(module)
@@ -170,18 +170,45 @@ def log_lars_diagnostics(optimizer, modules, writer, global_iter):
 
     # Snapshot medians from the most recent step.
     snapshot = defaultdict(lambda: defaultdict(list))
+    totals = defaultdict(lambda: [0.0, 0.0, 0, 0.0])  # sq, init_sq, fallback count, pre_sq
     for stats in optimizer.last_stats.values():
         for s in stats:
-            category = labels_by_id.get(s.get("pid"), "unlabelled")
-            for q in ("relative_step", "trust_ratio", "decay_ratio", "radial_cos"):
-                if q in s:
-                    snapshot[category][q].append(float(s[q]))
+            category = labels_by_id.get(s["pid"], "unlabelled")
+            for q in ("relative_step", "trust_ratio", "decay_ratio", "radial_cos", "log_r"):
+                snapshot[category][q].append(s[q])
+            t = totals[category]
+            t[0] += s["sq"]
+            t[1] += s["init_sq"]
+            t[2] += s["fallback"]
+            t[3] += s["pre_sq"] 
+
+    for category, (sq, init_sq, n_fallback, pre_sq) in totals.items():
+        writer.add_scalar(f"lars/{category}/l2", math.sqrt(sq), global_iter)
+        if init_sq > 0:
+            writer.add_scalar(f"lars/{category}/l2_over_init", math.sqrt(sq / init_sq), global_iter)
+        writer.add_scalar(f"lars/{category}/fallback_count", n_fallback, global_iter)
+
+        if pre_sq > 0:
+            log_rate = 0.5 * math.log(sq / pre_sq)
+            writer.add_scalar(f"lars/{category}/agg_log_rate_per_step", log_rate, global_iter)
+            if steps_per_epoch:
+                writer.add_scalar(f"lars/{category}/agg_rate_per_epoch",
+                                  math.exp(min(log_rate * steps_per_epoch, 700.0)), global_iter)
+        
     for category, quantities in snapshot.items():
         for q, vals in quantities.items():
-            v = torch.tensor(vals)
+            v = torch.tensor(vals, dtype=torch.float64)
             v = v[torch.isfinite(v)]
-            if v.numel():
-                writer.add_scalar(f"lars/{category}/{q}_median", v.median().item(), global_iter)
+            if not v.numel():
+                continue
+            med = v.median().item()
+            if q == "log_r":
+                writer.add_scalar(f"lars/{category}/implied_r_log_per_step", med, global_iter)
+                if steps_per_epoch:
+                    writer.add_scalar(f"lars/{category}/implied_r_per_epoch",
+                                      math.exp(min(med * steps_per_epoch, 700.0)), global_iter)
+            else:
+                writer.add_scalar(f"lars/{category}/{q}_median", med, global_iter)
 
     for gi, g in enumerate(optimizer.param_groups):
         writer.add_scalar(f"lars/lr/{g.get('group_name', gi)}", g["lr"], global_iter)

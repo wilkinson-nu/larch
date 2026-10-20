@@ -387,6 +387,7 @@ def run_training(rank, local_rank, world_size, args):
                     modules={"encoder": unwrap(encoder), "proj": unwrap(heads["proj"])},
                     writer=writer,
                     global_iter=global_iter,
+                    steps_per_epoch=len(train_loader)
                 )
             
             ## ...after all that logging, finally update the scheduler...

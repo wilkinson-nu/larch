@@ -77,6 +77,11 @@ class LARS(torch.optim.Optimizer):
 
                 # Momentum
                 state = self.state[p]
+
+                ## Initialisation info
+                if "init_sq" not in state:
+                    state["init_sq"] = p.detach().double().pow(2).sum()
+                
                 if "momentum_buffer" not in state:
                     buf = state["momentum_buffer"] = update.detach().clone()
                 else:
@@ -96,6 +101,7 @@ class LARS(torch.optim.Optimizer):
                 # Needs the pre-update weights. The applied update is -lr * buf,
                 # so a positive value means the step increases ||p||.
                 if collect_stats:
+                    pre_sq = p.double().pow(2).sum()
                     radial_cos = -torch.dot(buf.flatten(), p.flatten()) / (
                         buf_norm * weight_norm).clamp_min(1e-12)
                 
@@ -105,6 +111,8 @@ class LARS(torch.optim.Optimizer):
                 if collect_stats:
                     name = names[param_idx] if names is not None else f"group{group_idx}_param{param_idx}"
                     scaled_update_norm = torch.norm(update)
+                    post_sq = p.double().pow(2).sum()
+                    log_r = 0.5 * torch.log(post_sq / pre_sq.clamp_min(1e-300))
                     group_stats.append({
                         "pid": id(p),
                         "name": name,
@@ -117,6 +125,10 @@ class LARS(torch.optim.Optimizer):
                         "radial_cos": radial_cos.item(),
                         "fallback": bool(not lars_exclude and not valid),
                         "post_abs_max": p.abs().max().item(),
+                        "sq": post_sq.item(),
+                        "init_sq": state["init_sq"].double().item(),
+                        "pre_sq": pre_sq.item(),
+                        "log_r": log_r.item() if pre_sq > 0 else float("nan"),
                     })
                     
             self.last_stats[group_idx] = group_stats
