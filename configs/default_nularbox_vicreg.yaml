@@ -20,6 +20,7 @@ weight_decay_final: -1.0   # -1 -> no WD schedule
 weight_decay_head: 1
 norm_encoder: 0
 non_lars_lr_scale: 0.03
+non_lars_weight_decay: 0.0
 
 ## ---- image size and augmentations ----
 out_image_size: 256

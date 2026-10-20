@@ -26,6 +26,7 @@ def get_opt_and_sched(args, encoder, heads, total_steps, world_size, print_debug
                                       args.weight_decay_final,
                                       bool(args.weight_decay_head),
                                       args.non_lars_lr_scale,
+                                      args.non_lars_weight_decay,
                                       print_debug)
     
     ## Sort out the optimizer (one for each GPU...)
@@ -67,6 +68,7 @@ def build_param_groups(encoder,
                        weight_decay_final=-1,
                        weight_decay_head=False,
                        non_lars_lr_scale=1.0,
+                       non_lars_weight_decay=0.0,
                        print_debug=False):
     """
     This works for both Adam and LARS.
@@ -140,7 +142,7 @@ def build_param_groups(encoder,
             "group_name": "omit",
             "params": omit_params,
             "names": omit_names,
-            "weight_decay": 0.0,
+            "weight_decay": non_lars_weight_decay,
             "weight_sched": False,
             "lars_exclude": True,
             "lr_scale": non_lars_lr_scale
