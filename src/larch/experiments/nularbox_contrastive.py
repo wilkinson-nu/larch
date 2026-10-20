@@ -381,7 +381,7 @@ def run_training(rank, local_rank, world_size, args):
 
             ## Update optimizer and scheduler
             optimizer.step()
-            if args.extra_log_rate > 0 and global_iter % args.extra_log_rate == 0 and rank == 0:
+            if args.extra_log_rate > 0 and global_iter > 0 and global_iter % args.extra_log_rate == 0 and rank == 0:
                 log_lars_diagnostics(
                     optimizer=optimizer,
                     modules={"encoder": unwrap(encoder), "proj": unwrap(heads["proj"])},
