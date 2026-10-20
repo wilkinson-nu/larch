@@ -65,7 +65,7 @@ vicreg_sim_coeff: 25.0
 vicreg_std_coeff: 25.0
 vicreg_cov_coeff: 1.0
 vicreg_strat_lambda: 0.0
-vicreg_strat_mode: "chunk"
+vicreg_strat_nchunks: -1
 
 ## ---- kNN and linear probe monitoring ----
 monitor_nbank: 100000

@@ -112,13 +112,17 @@ def run_training(rank, local_rank, world_size, args):
         print0(f"      std_coeff = {args.vicreg_std_coeff}")
         print0(f"      cov_coeff = {args.vicreg_cov_coeff}")
         print0(f"   strat_lambda = {args.vicreg_strat_lambda}")
-        print0(f"     strat_mode = {args.vicreg_strat_mode}")
+        print0(f"  strat_nchunks = {args.vicreg_strat_nchunks}")
+
+        ## Get the number of chunks, default to a sensible baseline
+        strat_nchunks = args.vicreg_strat_nchunks
+        if strat_nchunks < 0: strat_nchunks = args.world_size*2 
+        
         loss_fns["proj"] = VICRegLossModDistributed(args.vicreg_sim_coeff,
                                                     args.vicreg_std_coeff,
                                                     args.vicreg_cov_coeff,
                                                     strat_lambda=args.vicreg_strat_lambda,
-                                                    strat_chunks=world_size*2,
-                                                    strat_mode=args.vicreg_strat_mode) 
+                                                    strat_chunks=strat_nchunks)
     else:
         raise ValueError(f"Unknown projection head loss: {args.proj_loss}")
 
@@ -680,7 +684,7 @@ def build_parser():
     parser.add_argument('--vicreg_std_coeff', type=float)
     parser.add_argument('--vicreg_cov_coeff', type=float)
     parser.add_argument('--vicreg_strat_lambda', type=float)    
-    parser.add_argument('--vicreg_strat_mode', type=str)
+    parser.add_argument('--vicreg_strat_nchunks', type=int)
     
     ## kNN and linear probe monitoring options
     parser.add_argument('--monitor_nbank', type=int)

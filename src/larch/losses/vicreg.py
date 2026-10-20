@@ -73,17 +73,14 @@ class VICRegLossModDistributed(nn.Module):
         eps=1e-4,
         strat_lambda=0.0,       # 0 = standard VICReg; 1 = fully chunked variance
         strat_chunks=8,         # K: number of occupancy-quantile chunks per global batch
-        strat_mode="pooled",    # "pooled": hinge on chunk-centred residuals; "chunk": hinge per chunk
     ):
         super().__init__()
-        assert strat_mode in ("pooled", "chunk")
         self.sim_coeff = sim_coeff
         self.std_coeff = std_coeff
         self.cov_coeff = cov_coeff
         self.eps = eps
         self.strat_lambda = strat_lambda
         self.strat_chunks = strat_chunks
-        self.strat_mode = strat_mode
         
     @staticmethod
     def off_diagonal(x):
@@ -114,28 +111,16 @@ class VICRegLossModDistributed(nn.Module):
         ## Loop over chunks, and calculate the variance term for each chunk
         var_per_chunk, key_std = [], []
 
-        ## Also keep track of residuals for a pooled version
-        res1, res2 = [], []
-        
         chunks = torch.tensor_split(order, self.strat_chunks)
         for idx in chunks:
             a, b = z1_all[idx], z2_all[idx]
             var_per_chunk.append(self._std_hinge(a) + self._std_hinge(b))
-
-            ## Chunk-centred residuals for the pooled version
-            res1.append(a - a.mean(dim=0, keepdim=True))
-            res2.append(b - b.mean(dim=0, keepdim=True))
             key_std.append(key_all[idx].std(unbiased=False))
 
         var_per_chunk = torch.stack(var_per_chunk)
         var_chunk = var_per_chunk.mean()
 
-        # Pooled: variance of residuals over the full batch = size-weighted mean of
-        # within-chunk variances, i.e. global variance minus between-chunk variance.
-        var_pooled = (self._std_hinge(torch.cat(res1, dim=0))
-                      + self._std_hinge(torch.cat(res2, dim=0)))
-
-        return var_chunk, var_pooled, var_per_chunk, torch.stack(key_std)
+        return var_chunk, var_per_chunk, torch.stack(key_std)
 
     ## This now requires a key to be given for stratifying the number of events into sub-batches
     def forward(self, emb_cat, strat_key):
@@ -163,12 +148,11 @@ class VICRegLossModDistributed(nn.Module):
 
         ## Calculate the chunked variance
         with torch.set_grad_enabled(lam > 0.0):
-            var_chunk, var_pooled, var_per_chunk, key_std = self._chunked_terms(z1_all, z2_all, key_all)
+            var_chunk, var_per_chunk, key_std = self._chunked_terms(z1_all, z2_all, key_all)
 
         ## Add to the variance loss
-        var_strat = var_pooled if self.strat_mode == "pooled" else var_chunk
         if lam > 0.0:
-            variance_loss = (1.0 - lam) * var_global + lam * var_strat
+            variance_loss = (1.0 - lam) * var_global + lam * var_chunk
         else:
             variance_loss = var_global
 
@@ -182,9 +166,7 @@ class VICRegLossModDistributed(nn.Module):
             "covariance": covariance_loss.detach(),
             "variance": variance_loss.detach(),
             "variance_chunked": var_chunk.detach(),
-            "variance_pooled": var_pooled.detach(),
             "variance_gap": (var_chunk - var_global).detach(),
-            "variance_gap_pooled": (var_pooled - var_global).detach(),
         }
 
         ## Track what is happening for each chunk
