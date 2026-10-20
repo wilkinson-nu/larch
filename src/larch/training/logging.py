@@ -87,7 +87,7 @@ def _get_residual_gamma_ids(module):
     get = getattr(module, "residual_gammas", None)
     return {id(p) for p in get()} if callable(get) else set()
 
-def param_fields(optimizer, modules, split=("encoder",)):
+def param_fields(optimizer, modules):
     """Return {id(p): fields} for every trainable parameter in `modules`.
 
     group:    optimizer param-group name, e.g. "lars", "omit"
@@ -109,7 +109,7 @@ def param_fields(optimizer, modules, split=("encoder",)):
                 kind = "linear"
             else:
                 kind = cls.lower()
-            layer = (module_name.split(".")[0] or tag) if tag in split else tag
+            layer = (module_name.split(".")[0] or tag) if tag == "encoder" else tag
 
             for param_name, p in owner.named_parameters(recurse=False):
                 if not p.requires_grad:
@@ -126,17 +126,19 @@ def param_fields(optimizer, modules, split=("encoder",)):
     return fields
 
 VIEWS = (
-    ("by_group", ("group", "layer", "category")),
-    ("by_group", ("group", "category")),
-    ("by_layer", ("layer", "group", "category")),
-    ("by_layer", ("layer", "group")),
+    ("by_layer",    ("layer", "category"), True),   # e.g. by_layer/layer2/norm/gamma
+    ("by_layer",    ("layer", "group"),    False),  # e.g. by_layer/layer2/omit
+    ("by_category", ("category",),         False),  # e.g. by_category/norm/gamma
+    ("by_group",    ("group",),            False),  # e.g. by_group/lars
 )
+FINE_METRICS = {"relative_step_interval_max", "grad_norm_interval_max",
+                "l2_over_init", "agg_log_rate_per_step", "trust_ratio_median"}
 
 def view_keys(f):
-    return [f"{view}/" + "/".join(f[k] for k in keys) for view, keys in VIEWS]
+    return [(f"{view}/" + "/".join(f[k] for k in keys), fine) for view, keys, fine in VIEWS]
 
 @torch.no_grad()
-def log_weight_norms(optimize, modules, writer, iteration, near_zero_gamma=0.05):
+def log_weight_norms(optimizer, modules, writer, iteration, near_zero_gamma=0.05):
     if writer is None: return
 
     ## Assemble a list of groupings that each parameter belongs to
@@ -154,24 +156,25 @@ def log_weight_norms(optimize, modules, writer, iteration, near_zero_gamma=0.05)
     sq = defaultdict(float)
     gamma = defaultdict(lambda: [0, 0, 0])  # negative, near zero, total
     for f, (sq_norm, neg, near) in zip(fields, rows):
-        for key in view_keys(f):
+        for key,_ in view_keys(f):
             sq[key] += sq_norm
-            if f["category"] == "norm/gamma":  # residual γ has its own category, so it's excluded
-                c = gamma[key]
-                c[0] += neg
-                c[1] += near
-                c[2] += f["param"].numel()
+            
+            if f["category"] == "norm/gamma":
+                for bn_key in (f"bn/{f['layer']}", "bn"):
+                    c = gamma[bn_key]
+                    c[0] += neg
+                    c[1] += near
+                    c[2] += f["param"].numel()
 
     ## Save information
     for key, v in sq.items():
         writer.add_scalar(f"wgt_{key}", math.sqrt(v), iteration)
-    for key, (neg, near, n) in gamma.items():
-        writer.add_scalar(f"bn_{key}/frac_gamma_negative", neg / n, iteration)
-        writer.add_scalar(f"bn_{key}/frac_gamma_near_zero", near / n, iteration)
-
-
+    for bn_key, (neg, near, n) in gamma.items():
+        writer.add_scalar(f"{bn_key}/frac_gamma_negative", neg / n, iteration)
+        writer.add_scalar(f"{bn_key}/frac_gamma_near_zero", near / n, iteration)
+        
 @torch.no_grad()
-def log_lars_diagnostics(optimizer, modules, writer, global_iter, steps_per_epoch=None):
+def log_lars_diagnostics(optimizer, modules, writer, global_iter):
     """Log LARS diagnostics aggregated under each view in VIEWS.
 
     Call on rank 0 after optimizer.step() and before scheduler.step(), with
@@ -180,6 +183,11 @@ def log_lars_diagnostics(optimizer, modules, writer, global_iter, steps_per_epoc
     """
     
     if writer is None: return
+
+    def put(key, metric, value):
+        k, fine = key
+        if not fine or metric in FINE_METRICS:
+            writer.add_scalar(f"lars_{k}/{metric}", value, global_iter)
     
     ## Assemble a list of groupings that each parameter belongs to
     fields = param_fields(optimizer, modules)
@@ -192,20 +200,22 @@ def log_lars_diagnostics(optimizer, modules, writer, global_iter, steps_per_epoc
         values = torch.stack([interval[pid] for pid in pids]).float().cpu()
         interval_max = defaultdict(lambda: torch.zeros(2))
         for pid, v in zip(pids, values):
-            for key in keys_for(pid):
+            for key in view_keys(fields.get(pid, unlabelled)):
                 interval_max[key] = torch.maximum(interval_max[key], v)
         for key, (rel_max, grad_max) in interval_max.items():
-            writer.add_scalar(f"lars_{key}/relative_step_interval_max", rel_max.item(), global_iter)
-            writer.add_scalar(f"lars_{key}/grad_norm_interval_max", grad_max.item(), global_iter)
+            put(key, "relative_step_interval_max", rel_max.item())
+            put(key, "grad_norm_interval_max", grad_max.item())
 
     # Snapshot medians from the most recent step.
     snapshot = defaultdict(lambda: defaultdict(list))
     totals = defaultdict(lambda: [0.0, 0.0, 0.0, 0])  # sq, init_sq, pre_sq, fallback count
     for stats in optimizer.last_stats.values():
         for s in stats:
-            for key in keys_for(s["pid"]):
-                for q in ("relative_step", "trust_ratio", "decay_ratio", "radial_cos", "log_r"):
+            for key in view_keys(fields.get(s["pid"], unlabelled)):
+                for q in ("relative_step", "decay_ratio", "radial_cos"):
                     snapshot[key][q].append(s[q])
+                if f["group"] != "omit":   # trust ratio is fixed at 1 in the omit group
+                    snapshot[key]["trust_ratio"].append(s["trust_ratio"])
                 t = totals[key]
                 t[0] += s["sq"]
                 t[1] += s["init_sq"]
@@ -215,13 +225,11 @@ def log_lars_diagnostics(optimizer, modules, writer, global_iter, steps_per_epoc
     # Aggregate quantities: sums over every tensor in the view.
     for key, (sq, init_sq, pre_sq, n_fallback) in totals.items():
         if init_sq > 0:  # all-zero-init views (e.g. residual gamma, biases) have no ratio
-            writer.add_scalar(f"lars_{key}/l2_over_init", math.sqrt(sq / init_sq), global_iter)
+            put(key, "l2_over_init", math.sqrt(sq / init_sq))
         if pre_sq > 0:
             log_rate = 0.5 * math.log(sq / pre_sq)
-            writer.add_scalar(f"lars_{key}/agg_log_rate_per_step", log_rate, global_iter)
-            if steps_per_epoch:
-                writer.add_scalar(f"lars_{key}/agg_rate_per_epoch", per_epoch(log_rate), global_iter)
-        writer.add_scalar(f"lars_{key}/fallback_count", n_fallback, global_iter)
+            put(key, "agg_log_rate_per_step", log_rate)
+        put(key, "fallback_count", n_fallback)
 
     # Medians: every tensor counts equally.
     for key, quantities in snapshot.items():
@@ -231,12 +239,7 @@ def log_lars_diagnostics(optimizer, modules, writer, global_iter, steps_per_epoc
             if not v.numel():
                 continue
             med = v.median().item()
-            if q == "log_r":
-                writer.add_scalar(f"lars_{key}/implied_r_log_per_step", med, global_iter)
-                if steps_per_epoch:
-                    writer.add_scalar(f"lars_{key}/implied_r_per_epoch", per_epoch(med), global_iter)
-            else:
-                writer.add_scalar(f"lars_{key}/{q}_median", med, global_iter)
+            put(key, f"{q}_median", med)
 
     for gi, g in enumerate(optimizer.param_groups):
         writer.add_scalar(f"lars_by_group/{g.get('group_name', gi)}/lr", g["lr"], global_iter)
