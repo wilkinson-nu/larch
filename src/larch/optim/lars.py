@@ -84,6 +84,15 @@ class LARS(torch.optim.Optimizer):
                     buf.mul_(momentum).add_(update)
                 buf_norm = torch.norm(buf)
 
+                # Keep track of the maximum values between logging steps
+                step_norm = lr * buf_norm
+                relative_step = torch.where(
+                    weight_norm > 0, step_norm / weight_norm.clamp_min(1e-12),
+                    torch.zeros_like(step_norm))
+                current = torch.stack([relative_step, grad_norm])
+                prev = self.interval_max.get(id(p))
+                self.interval_max[id(p)] = current if prev is None else torch.maximum(prev, current)
+                
                 # Needs the pre-update weights. The applied update is -lr * buf,
                 # so a positive value means the step increases ||p||.
                 if collect_stats:
