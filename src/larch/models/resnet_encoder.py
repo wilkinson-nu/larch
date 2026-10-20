@@ -188,15 +188,11 @@ class ResNetBase(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
-        # For v1, go back and zero out BN weights for the residual bit
-        for m in self.modules():
-            if isinstance(m, BasicBlock) and m.norm2 is not None:
-                nn.init.zeros_(m.norm2.bn.weight)
+        # Zero-init residual branches for v1 (Goyal et al.)
+        for gamma in self.residual_gammas():
+            nn.init.zeros_(gamma)
+
             
-            elif isinstance(m, Bottleneck) and m.norm3 is not None:
-                nn.init.zeros_(m.norm3.bn.weight)
-
-
     def _make_layer(self, block, planes, num_blocks, stride, dilation=1):
 
         ## A bit of a hack to optionally remove BN from the first layer
@@ -249,6 +245,13 @@ class ResNetBase(nn.Module):
         if self.bottleneck_dim > 0:
             return self.bottleneck_dim
         return self.get_pool_nchan()
+
+    ## Access weights of any BNs that end residual branches
+    def residual_gammas(self):
+        for m in self.modules():
+            norm = getattr(m, "residual_norm", None)
+            if norm is not None:
+                yield norm.bn.weight
     
 
 class ResNet18v2(ResNetBase):

@@ -66,6 +66,10 @@ class BasicBlock(nn.Module):
         else:
             self.shortcut = None
 
+    ## Info on residual norms as these get init gamma = 0
+    @property
+    def residual_norm(self):
+        return self.norm2
         
     def forward(self, x):
         residual = self.shortcut(x) if self.shortcut is not None else x
@@ -149,7 +153,11 @@ class Bottleneck(nn.Module):
         else:
             self.shortcut = None
 
-
+    ## Info on residual norms as these get init gamma = 0
+    @property
+    def residual_norm(self):
+        return self.norm3
+    
     def forward(self, x):
         residual = self.shortcut(x) if self.shortcut is not None else x
         out = self.conv1(x)
