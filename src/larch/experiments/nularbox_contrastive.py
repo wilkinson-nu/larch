@@ -21,9 +21,8 @@ from larch.models.resnet_encoder import get_encoder
 from larch.models.projection_head import get_projhead
 from larch.models.clustering_head import get_clusthead
 from larch.metrics import argmax_consistency, uniformity, alignment, simclr_geometry_metrics
-from larch.training.logging import log_scalar, log_grad_norm, log_grad_rms, log_grad_over_wgt, log_weight_norms
+from larch.training.logging import log_scalar, log_weight_norms, log_lars_diagnostics
 from larch.optim.scheduling import get_opt_and_sched, update_weight_decay
-from larch.optim.lars import log_lars_diagnostics
 
 ## Import datasets
 from larch.datasets.base import solo_labelled_collate_fn
@@ -43,7 +42,7 @@ from larch.evaluation.knn import run_knn_probes, log_knn_results
 from larch.evaluation.regression import run_regression_probes, log_regression_results
 
 ## Utilities for multi-rank training
-from larch.distributed import setup_distributed_runtime, print0
+from larch.distributed import setup_distributed_runtime, print0, unwrap
 
 ## Checkpointing
 from larch.training.checkpointing import load_pretrained, load_checkpoint, save_checkpoint
@@ -385,8 +384,8 @@ def run_training(rank, local_rank, world_size, args):
             if args.extra_log_rate > 0 and global_iter % args.extra_log_rate == 0 and rank == 0:
                 log_lars_diagnostics(
                     optimizer=optimizer,
+                    modules={"encoder": unwrap(encoder), "proj": unwrap(heads["proj"])},
                     writer=writer,
-                    metrics=metrics,
                     global_iter=global_iter,
                 )
             
@@ -489,15 +488,8 @@ def run_training(rank, local_rank, world_size, args):
             log_scalar(writer, metrics, 'monitor/enc_alignment', av_enc_align, epoch)
             log_scalar(writer, metrics, 'monitor/enc_uniformity', av_enc_unif, epoch)
                 
-            ## Extensive logging for gradient debugging
-            #log_grad_norm(encoder.module, "encoder", writer, epoch)
-            #log_grad_rms(encoder.module, "encoder", writer, epoch)
-            #log_grad_over_wgt(encoder.module, "encoder", writer, epoch)
+            ## Logging for gradient debugging
             log_weight_norms(encoder.module, "encoder", writer, epoch)
-            
-            #log_grad_norm(heads["proj"].module, "proj", writer, epoch)
-            #log_grad_rms(heads["proj"].module, "proj", writer, epoch)
-            #log_grad_over_wgt(heads["proj"].module, "proj", writer, epoch)
             log_weight_norms(heads["proj"].module, "proj", writer, epoch)
             
             ## More summary quantities about the encoder and projection spaces
@@ -514,11 +506,8 @@ def run_training(rank, local_rank, world_size, args):
                 log_scalar(writer, metrics, 'monitor/clust_alignment', av_clust_align, epoch)
                 log_scalar(writer, metrics, 'monitor/clust_uniformity', av_clust_unif, epoch)
 
-                ## Extensive logging for gradient debugging
-                log_grad_norm(heads["clust"].module, "clust", writer, epoch)
-                log_grad_rms(heads["clust"].module, "clust", writer, epoch)
-                log_grad_over_wgt(heads["clust"].module, "clust", writer, epoch)
-                log_weight_norm(heads["clust"].module, "clust", writer, epoch)
+                ## Logging for gradient debugging
+                log_weight_norms(heads["clust"].module, "clust", writer, epoch)
 
             if proj_loss_parts is not None:
                 for name, value in av_proj_loss_parts.items():
@@ -638,6 +627,7 @@ def build_parser():
     parser.add_argument('--weight_decay_head', type=int, choices=[0,1])
     parser.add_argument('--norm_encoder', type=int, choices=[0,1])
     parser.add_argument('--non_lars_lr_scale', type=float)
+    parser.add_argument('--non_lars_weight_decay', type=float)
     
     ## Image size and augmentations
     parser.add_argument('--out_image_size', type=int)

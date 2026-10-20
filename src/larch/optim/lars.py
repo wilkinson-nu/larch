@@ -1,10 +1,6 @@
 import torch
 from math import cos, pi
 
-import math
-import torch
-from larch.training.logging import log_scalar
-
 class LARS(torch.optim.Optimizer):
     def __init__(
         self,
@@ -27,7 +23,13 @@ class LARS(torch.optim.Optimizer):
 
         # Diagnostics from the most recent step.
         self.last_stats = {}
+        # id(p) -> tensor([relative_step, grad_norm])
+        self.interval_max = {}
 
+    def pop_interval_max(self):
+        out, self.interval_max = self.interval_max, {}
+        return out        
+        
     @torch.no_grad()
     def step(self):
         
@@ -51,14 +53,16 @@ class LARS(torch.optim.Optimizer):
                 if p.grad is None:
                     continue
 
-                update = p.grad
+                ## Get the gradient norm before scaling
+                grad_norm = torch.norm(p.grad)
+                weight_norm = torch.norm(p)
 
                 ## Weight decay, BEFORE getting the update norm
-                if not lars_exclude and weight_decay != 0.0:
+                update = p.grad
+                if weight_decay != 0.0:
                     update = update.add(p, alpha=weight_decay)
                                                             
                 update_norm = torch.norm(update)
-                weight_norm = torch.norm(p)
                 
                 ## Only apply to LARS scaling to requested layers
                 trust_ratio = torch.ones_like(weight_norm)
@@ -67,73 +71,45 @@ class LARS(torch.optim.Optimizer):
                     # A trust ratio of one is the fallback for zero-norm
                     # weights or updates, allowing zero-initialized tensors
                     # to begin learning.
-                    if weight_norm > 0 and update_norm > 0:
-                        trust_ratio = (
-                            trust_coef
-                            * weight_norm
-                            / (update_norm + eps)
-                        )
-                        update = update.mul(trust_ratio)
+                    valid = (weight_norm > 0) & (update_norm > 0)
+                    trust_ratio = torch.where(valid, trust_coef * weight_norm / (update_norm + eps), trust_ratio)
+                    update = update.mul(trust_ratio)
 
-                # Momentum.
+                # Momentum
                 state = self.state[p]
-
                 if "momentum_buffer" not in state:
                     buf = state["momentum_buffer"] = update.detach().clone()
                 else:
                     buf = state["momentum_buffer"]
                     buf.mul_(momentum).add_(update)
+                buf_norm = torch.norm(buf)
 
+                # Needs the pre-update weights. The applied update is -lr * buf,
+                # so a positive value means the step increases ||p||.
+                if collect_stats:
+                    radial_cos = -torch.dot(buf.flatten(), p.flatten()) / (
+                        buf_norm * weight_norm).clamp_min(1e-12)
+                
                 # Apply update
                 p.add_(buf, alpha=-lr)
 
                 if collect_stats:
-
-                    name = (
-                        names[param_idx]
-                        if names is not None
-                        else f"group{group_idx}_param{param_idx}"
-                    )
-                    
-                    # Pre-update diagnostics
-                    grad_norm = torch.norm(update)
-                    grad_rms = grad_norm / math.sqrt(p.numel())
-
-                    buf_norm = torch.norm(buf)
-
-                    # Actual parameter change for this optimizer step
-                    step_norm = lr * buf_norm
-                    step_rms = step_norm / math.sqrt(p.numel())
-
-                    if weight_norm > 0:
-                        relative_step = step_norm / weight_norm
-                    else:
-                        relative_step = torch.full_like(step_norm, float("nan"))
-                        
-                    if update_norm > 0:
-                        momentum_amplification = buf_norm / update_norm
-                    else:
-                        momentum_amplification = torch.full_like(buf_norm, float("nan"))
-                        
-                    # Post-update diagnostics
-                    post_weight_rms = (
-                        torch.norm(p)
-                        / math.sqrt(p.numel())
-                    )
-                    post_abs_max = p.abs().max()
-                    
+                    name = names[param_idx] if names is not None else f"group{group_idx}_param{param_idx}"
+                    scaled_update_norm = torch.norm(update)
                     group_stats.append({
+                        "pid": id(p),
                         "name": name,
                         "weight_norm": weight_norm.item(),
-                        "grad_rms": grad_rms.item(),
+                        "grad_norm": grad_norm.item(),
                         "trust_ratio": trust_ratio.item(),
-                        "step_rms": step_rms.item(),
-                        "relative_step": relative_step.item(),
-                        "momentum_amplification": momentum_amplification.item(),
-                        "post_weight_rms": post_weight_rms.item(),
-                        "post_abs_max": post_abs_max.item(),
+                        "relative_step": relative_step.item() if weight_norm > 0 else float("nan"),
+                        "momentum_amplification": (buf_norm / scaled_update_norm.clamp_min(1e-12)).item(),
+                        "decay_ratio": (weight_decay * weight_norm / grad_norm.clamp_min(1e-12)).item(),
+                        "radial_cos": radial_cos.item(),
+                        "fallback": bool(not lars_exclude and not valid),
+                        "post_abs_max": p.abs().max().item(),
                     })
-
+                    
             self.last_stats[group_idx] = group_stats
             
 
@@ -185,168 +161,3 @@ class LARS_LRScheduler:
     def load_state_dict(self, sd):
         self.step_count = sd['step_count']
         self._set_lr(self._lr_at(self.step_count))
-
-
-def log_lars_diagnostics(
-    optimizer,
-    writer,
-    metrics,
-    global_iter,
-    weight_norm_min=1e-6,
-):
-    """
-    Log diagnostics stored by the most recent LARS.step().
-
-    Call immediately after optimizer.step() and before scheduler.step(),
-    on rank 0 only.
-    """
-    print(f"\nLARS diagnostics at step {global_iter}")
-
-    for group_idx, stats in optimizer.last_stats.items():
-        if not stats:
-            continue
-
-        group = optimizer.param_groups[group_idx]
-        group_name = group.get("group_name", f"group{group_idx}")
-        prefix = f"lars/{group_name}"
-
-        lr = group["lr"]
-        lars_exclude = group.get("lars_exclude", False)
-
-        values = torch.tensor(
-            [
-                [
-                    s["weight_norm"],
-                    s["grad_rms"],
-                    s["trust_ratio"],
-                    s["step_rms"],
-                    s["relative_step"],
-                    s["momentum_amplification"],
-                    s["post_weight_rms"],
-                    s["post_abs_max"],
-                ]
-                for s in stats
-            ],
-            dtype=torch.float32,
-        )
-
-        (
-            weight_norm,
-            grad_rms,
-            trust_ratio,
-            step_rms,
-            relative_step,
-            momentum_amp,
-            post_weight_rms,
-            post_abs_max,
-        ) = values.unbind(dim=1)
-
-        # Metrics useful for every group.
-        log_scalar(
-            writer, metrics, f"{prefix}/lr",
-            lr, global_iter,
-        )
-        log_scalar(
-            writer, metrics, f"{prefix}/grad_rms_median",
-            grad_rms.median().item(), global_iter,
-        )
-        log_scalar(
-            writer, metrics, f"{prefix}/grad_rms_max",
-            grad_rms.max().item(), global_iter,
-        )
-        log_scalar(
-            writer, metrics, f"{prefix}/step_rms_median",
-            step_rms.median().item(), global_iter,
-        )
-        log_scalar(
-            writer, metrics, f"{prefix}/step_rms_max",
-            step_rms.max().item(), global_iter,
-        )
-        log_scalar(
-            writer, metrics, f"{prefix}/post_weight_rms_max",
-            post_weight_rms.max().item(), global_iter,
-        )
-        log_scalar(
-            writer, metrics, f"{prefix}/post_abs_max",
-            post_abs_max.max().item(), global_iter,
-        )
-
-        writer.add_histogram(
-            f"{prefix}/log10_step_rms",
-            step_rms.clamp_min(1e-12).log10(),
-            global_iter,
-        )
-
-        # Relative step is undefined for zero-initialized parameters.
-        valid_relative = (
-            (weight_norm > weight_norm_min)
-            & torch.isfinite(relative_step)
-        )
-
-        if valid_relative.any():
-            relative = relative_step[valid_relative]
-
-            log_scalar(
-                writer, metrics, f"{prefix}/relative_step_median",
-                relative.median().item(), global_iter,
-            )
-            log_scalar(
-                writer, metrics, f"{prefix}/relative_step_max",
-                relative.max().item(), global_iter,
-            )
-
-            writer.add_histogram(
-                f"{prefix}/log10_relative_step",
-                relative.clamp_min(1e-12).log10(),
-                global_iter,
-            )
-
-        # Trust ratio is meaningful only for LARS-managed groups.
-        if not lars_exclude:
-            valid_trust = torch.isfinite(trust_ratio)
-
-            if valid_trust.any():
-                trust = trust_ratio[valid_trust]
-
-                log_scalar(
-                    writer, metrics, f"{prefix}/trust_median",
-                    trust.median().item(), global_iter,
-                )
-                log_scalar(
-                    writer, metrics, f"{prefix}/trust_min",
-                    trust.min().item(), global_iter,
-                )
-                log_scalar(
-                    writer, metrics, f"{prefix}/trust_max",
-                    trust.max().item(), global_iter,
-                )
-
-                writer.add_histogram(
-                    f"{prefix}/log10_trust",
-                    trust.clamp_min(1e-12).log10(),
-                    global_iter,
-                )
-
-        valid_amp = torch.isfinite(momentum_amp)
-
-        if valid_amp.any():
-            amp = momentum_amp[valid_amp]
-
-            log_scalar(
-                writer, metrics, f"{prefix}/momentum_amp_median",
-                amp.median().item(), global_iter,
-            )
-            log_scalar(
-                writer, metrics, f"{prefix}/momentum_amp_max",
-                amp.max().item(), global_iter,
-            )
-
-        largest_idx = step_rms.argmax().item()
-        largest = stats[largest_idx]
-
-        print(
-            f"  {group_name}: "
-            f"lr={lr:.4e}, "
-            f"step_rms_max={largest['step_rms']:.4e}, "
-            f"parameter={largest['name']}"
-        )

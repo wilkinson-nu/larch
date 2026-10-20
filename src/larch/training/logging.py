@@ -145,3 +145,44 @@ def log_weight_norms(module, tag, writer, iteration, near_zero_gamma=0.05):
     for category, (negative, near_zero, total) in gamma_counts.items():
         writer.add_scalar(f"bn/{category}/frac_gamma_negative", negative / total, iteration)
         writer.add_scalar(f"bn/{category}/frac_gamma_near_zero", near_zero / total, iteration)
+
+
+@torch.no_grad()
+def log_lars_diagnostics(optimizer, modules, writer, global_iter):
+    labels_by_id = {}
+    for tag, module in modules.items():
+        residual_ids = _get_residual_gamma_ids(module)
+        for param, labels in param_labels(module, residual_ids=residual_ids):
+            labels_by_id[id(param)] = f"{tag}/{labels['kind']}/{labels['role']}"
+
+    # Interval maxima: one GPU->CPU transfer for everything.
+    interval = optimizer.pop_interval_max()
+    if interval:
+        pids = list(interval)
+        values = torch.stack([interval[pid] for pid in pids]).cpu()
+        category_max = defaultdict(lambda: torch.zeros(2))
+        for pid, v in zip(pids, values):
+            category = labels_by_id.get(pid, "unlabelled")
+            category_max[category] = torch.maximum(category_max[category], v)
+        for category, (rel_max, grad_max) in category_max.items():
+            writer.add_scalar(f"lars/{category}/relative_step_interval_max", rel_max.item(), global_iter)
+            writer.add_scalar(f"lars/{category}/grad_norm_interval_max", grad_max.item(), global_iter)
+
+    # Snapshot medians from the most recent step.
+    snapshot = defaultdict(lambda: defaultdict(list))
+    for stats in optimizer.last_stats.values():
+        for s in stats:
+            category = labels_by_id.get(s.get("pid"), "unlabelled")
+            for q in ("relative_step", "trust_ratio", "decay_ratio", "radial_cos"):
+                if q in s:
+                    snapshot[category][q].append(float(s[q]))
+    for category, quantities in snapshot.items():
+        for q, vals in quantities.items():
+            v = torch.tensor(vals)
+            v = v[torch.isfinite(v)]
+            if v.numel():
+                writer.add_scalar(f"lars/{category}/{q}_median", v.median().item(), global_iter)
+
+    for gi, g in enumerate(optimizer.param_groups):
+        writer.add_scalar(f"lars/lr/{g.get('group_name', gi)}", g["lr"], global_iter)
+        
