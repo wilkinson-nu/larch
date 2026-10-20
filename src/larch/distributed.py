@@ -16,6 +16,9 @@ def print0(*args, **kwargs):
         kwargs.setdefault("flush", True)
         print(*args, **kwargs)
 
+def unwrap(model):
+    return getattr(model, "module", model)
+        
 class GatherLayer(torch.autograd.Function):
     """Gather tensors from all process, supporting backward propagation."""
 

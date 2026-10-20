@@ -2,8 +2,7 @@ import torch
 from pathlib import Path
 import os
 
-def unwrap(model):
-    return getattr(model, "module", model)
+from larch.distributed import unwrap
 
 def load_pretrained(encoder, heads, file_name):
     checkpoint = torch.load(file_name, map_location='cpu')
