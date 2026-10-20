@@ -1,9 +1,11 @@
 from torch import nn
 import torch
 import MinkowskiEngine as ME
+from collections import OrderedDict
+
 from larch.models.resnetv2_blocks import PreActBasicBlock, PreActBottleneck
 from larch.models.resnetv1_blocks import BasicBlock, Bottleneck
-from collections import OrderedDict
+from larch.models.gem import MinkowskiGlobalGeM
 
 ## This is taken from the MinkowskiEngine implementation, but modified for v2 blocks
 ## Some inspiration + error checking against https://github.com/kuangliu/pytorch-cifar/blob/master/models/preact_resnet.py
@@ -50,6 +52,8 @@ class ResNetBase(nn.Module):
             self.global_pool = ME.MinkowskiGlobalMaxPooling()
         elif self.pool == "avg":
             self.global_pool = ME.MinkowskiGlobalAvgPooling()
+        elif self.pool == "gem":
+            self.global_pool = MinkowskiGlobalGeM()
         elif self.pool == "both":
             self.global_pool_avg = ME.MinkowskiGlobalAvgPooling()
             self.global_pool_max = ME.MinkowskiGlobalMaxPooling()
