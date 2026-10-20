@@ -116,7 +116,7 @@ def run_training(rank, local_rank, world_size, args):
 
         ## Get the number of chunks, default to a sensible baseline
         strat_nchunks = args.vicreg_strat_nchunks
-        if strat_nchunks < 0: strat_nchunks = args.world_size*2 
+        if strat_nchunks < 0: strat_nchunks = world_size*2 
         
         loss_fns["proj"] = VICRegLossModDistributed(args.vicreg_sim_coeff,
                                                     args.vicreg_std_coeff,
