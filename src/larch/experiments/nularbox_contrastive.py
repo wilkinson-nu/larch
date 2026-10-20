@@ -382,9 +382,11 @@ def run_training(rank, local_rank, world_size, args):
             ## Update optimizer and scheduler
             optimizer.step()
             if args.extra_log_rate > 0 and global_iter > 0 and global_iter % args.extra_log_rate == 0 and rank == 0:
+                modules = {"encoder": unwrap(encoder), "proj": unwrap(heads["proj"])}
+                if "clust" in heads: modules["clust"] = unwrap(heads["clust"])
                 log_lars_diagnostics(
                     optimizer=optimizer,
-                    modules={"encoder": unwrap(encoder), "proj": unwrap(heads["proj"])},
+                    modules=modules,
                     writer=writer,
                     global_iter=global_iter,
                     steps_per_epoch=len(train_loader)
@@ -490,8 +492,9 @@ def run_training(rank, local_rank, world_size, args):
             log_scalar(writer, metrics, 'monitor/enc_uniformity', av_enc_unif, epoch)
                 
             ## Logging for gradient debugging
-            log_weight_norms(encoder.module, "encoder", writer, epoch)
-            log_weight_norms(heads["proj"].module, "proj", writer, epoch)
+            modules = {"encoder": unwrap(encoder), "proj": unwrap(heads["proj"])}
+            if "clust" in heads: modules["clust"] = unwrap(heads["clust"])            
+            log_weight_norms(optimizer, modules, writer, epoch)
             
             ## More summary quantities about the encoder and projection spaces
             for name, value in enc_geom.items():
@@ -506,9 +509,6 @@ def run_training(rank, local_rank, world_size, args):
                 log_scalar(writer, metrics, 'monitor/acc', av_acc, epoch)
                 log_scalar(writer, metrics, 'monitor/clust_alignment', av_clust_align, epoch)
                 log_scalar(writer, metrics, 'monitor/clust_uniformity', av_clust_unif, epoch)
-
-                ## Logging for gradient debugging
-                log_weight_norms(heads["clust"].module, "clust", writer, epoch)
 
             if proj_loss_parts is not None:
                 for name, value in av_proj_loss_parts.items():
