@@ -21,7 +21,7 @@ from larch.models.resnet_encoder import get_encoder
 from larch.models.projection_head import get_projhead
 from larch.models.clustering_head import get_clusthead
 from larch.metrics import argmax_consistency, uniformity, alignment, simclr_geometry_metrics
-from larch.training.logging import log_scalar, log_grad_norm, log_grad_rms, log_grad_over_wgt, log_weight_norm
+from larch.training.logging import log_scalar, log_grad_norm, log_grad_rms, log_grad_over_wgt, log_weight_norms
 from larch.optim.scheduling import get_opt_and_sched, update_weight_decay
 from larch.optim.lars import log_lars_diagnostics
 
@@ -490,15 +490,15 @@ def run_training(rank, local_rank, world_size, args):
             log_scalar(writer, metrics, 'monitor/enc_uniformity', av_enc_unif, epoch)
                 
             ## Extensive logging for gradient debugging
-            log_grad_norm(encoder.module, "encoder", writer, epoch)
-            log_grad_rms(encoder.module, "encoder", writer, epoch)
-            log_grad_over_wgt(encoder.module, "encoder", writer, epoch)
-            log_weight_norm(encoder.module, "encoder", writer, epoch)
+            #log_grad_norm(encoder.module, "encoder", writer, epoch)
+            #log_grad_rms(encoder.module, "encoder", writer, epoch)
+            #log_grad_over_wgt(encoder.module, "encoder", writer, epoch)
+            log_weight_norms(encoder.module, "encoder", writer, epoch)
             
-            log_grad_norm(heads["proj"].module, "proj", writer, epoch)
-            log_grad_rms(heads["proj"].module, "proj", writer, epoch)
-            log_grad_over_wgt(heads["proj"].module, "proj", writer, epoch)
-            log_weight_norm(heads["proj"].module, "proj", writer, epoch)
+            #log_grad_norm(heads["proj"].module, "proj", writer, epoch)
+            #log_grad_rms(heads["proj"].module, "proj", writer, epoch)
+            #log_grad_over_wgt(heads["proj"].module, "proj", writer, epoch)
+            log_weight_norms(heads["proj"].module, "proj", writer, epoch)
             
             ## More summary quantities about the encoder and projection spaces
             for name, value in enc_geom.items():

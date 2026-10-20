@@ -76,3 +76,68 @@ def log_weight_norm(module, tag, writer, iteration):
     weight_rms = (total / count).sqrt().item()
     writer.add_scalar(f'weights/{tag}/l2', weight_l2, iteration)
     writer.add_scalar(f'weights/{tag}/rms', weight_rms, iteration)
+
+
+## Magic function to deal with the uninitialised gammas in BNs at the end of a residual  block
+def _residual_ids(module):
+    get = getattr(module, "residual_gammas", None)
+    return {id(p) for p in get()} if callable(get) else set()
+
+
+def param_labels(module, stage_depth=1, residual_ids=frozenset()):
+    """Yield (param, labels) for each trainable parameter, labelled by its owning module."""
+    for module_name, owner in module.named_modules():
+        cls = type(owner).__name__
+        if isinstance(owner, nn.modules.batchnorm._BatchNorm) or "Norm" in cls:
+            kind = "norm"
+        elif isinstance(owner, nn.modules.conv._ConvNd) or "Convolution" in cls:
+            kind = "conv"
+        elif isinstance(owner, nn.Linear):
+            kind = "linear"
+        else:
+            kind = cls.lower()
+
+        for param_name, param in owner.named_parameters(recurse=False):
+            if not param.requires_grad:
+                continue
+            if kind == "norm":
+                role = {"weight": "gamma", "bias": "beta"}.get(param_name, param_name)
+                if id(param) in residual_ids:
+                    role = "gamma_residual"
+            elif param_name == "kernel":          # MinkowskiEngine conv weights
+                role = "weight"
+            else:
+                role = param_name
+            stage = ".".join(module_name.split(".")[:stage_depth]) or "root"
+            yield param, {"kind": kind, "role": role, "stage": stage}
+
+
+@torch.no_grad()
+def log_weight_norms(module, tag, writer, iteration, near_zero_gamma=0.05):
+    if writer is None: return
+
+    by_type = defaultdict(float)                    # e.g. "norm/gamma_residual"
+    by_stage = defaultdict(float)                   # e.g. "layer4"
+    gamma_counts = defaultdict(lambda: [0, 0, 0])   # negative, near zero, total
+
+    residual_ids = {id(g) for g in residual_gammas(module)}
+    for param, labels in param_labels(module, residual_ids=residual_ids):
+        sq_norm = param.detach().float().pow(2).sum().item()
+        by_type[f"{labels['kind']}/{labels['role']}"] += sq_norm
+        by_stage[f"{labels['stage']}"] += sq_norm
+
+        # Residual gammas are excluded here
+        if labels["kind"] == "norm" and labels["role"] == "gamma":
+            gamma = param.detach()
+            counts = gamma_counts[f"{labels['stage']}"]
+            counts[0] += int((gamma < 0).sum())
+            counts[1] += int((gamma.abs() < near_zero_gamma).sum())
+            counts[2] += gamma.numel()
+
+    for category, sq_norm in by_type.items():
+        writer.add_scalar(f"weights/${tag}/type/{category}", math.sqrt(sq_norm), iteration)
+    for category, sq_norm in by_stage.items():
+        writer.add_scalar(f"weights/${tag}/stage/{category}", math.sqrt(sq_norm), iteration)
+    for category, (negative, near_zero, total) in gamma_counts.items():
+        writer.add_scalar(f"bn/${tag}/{category}/frac_gamma_negative", negative / total, iteration)
+        writer.add_scalar(f"bn/${tag}/{category}/frac_gamma_near_zero", near_zero / total, iteration)
