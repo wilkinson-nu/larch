@@ -211,7 +211,8 @@ def log_lars_diagnostics(optimizer, modules, writer, global_iter):
     totals = defaultdict(lambda: [0.0, 0.0, 0.0, 0])  # sq, init_sq, pre_sq, fallback count
     for stats in optimizer.last_stats.values():
         for s in stats:
-            for key in view_keys(fields.get(s["pid"], unlabelled)):
+            f = fields.get(s["pid"], unlabelled)
+            for key in view_keys(f):
                 for q in ("relative_step", "decay_ratio", "radial_cos"):
                     snapshot[key][q].append(s[q])
                 if f["group"] != "omit":   # trust ratio is fixed at 1 in the omit group
