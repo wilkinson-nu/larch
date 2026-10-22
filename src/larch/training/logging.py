@@ -159,18 +159,22 @@ def log_weight_norms(optimizer, modules, writer, iteration, near_zero_gamma=0.05
         for key,_ in view_keys(f):
             sq[key] += sq_norm
             
-            if f["category"] == "norm/gamma":
-                for bn_key in (f"bn/{f['layer']}", "bn"):
-                    c = gamma[bn_key]
-                    c[0] += neg
-                    c[1] += near
-                    c[2] += f["param"].numel()
+        if f["category"] == "norm/gamma":
+            for bn_key in (f"bn/{f['layer']}", "bn"):
+                c = gamma[bn_key]
+                c[0] += neg
+                c[1] += near
+                c[2] += f["param"].numel()
 
     ## Save information
     for key, v in sq.items():
+        ## L2 norm of all parameters in this view: sqrt(sum of ||w||^2 over every tensor in it)
         writer.add_scalar(f"wgt_{key}", math.sqrt(v), iteration)
     for bn_key, (neg, near, n) in gamma.items():
+        ## Fraction of BN gamma entries that are negative (excluding residual gammas)
         writer.add_scalar(f"{bn_key}/frac_gamma_negative", neg / n, iteration)
+        ## Fraction of ordinary BN gamma entries with |gamma| < near_zero_gamma (excluding residual gammas)
+        ## A rising value means channels are being switched off, which can indicate scale drift
         writer.add_scalar(f"{bn_key}/frac_gamma_near_zero", near / n, iteration)
         
 @torch.no_grad()
@@ -203,7 +207,11 @@ def log_lars_diagnostics(optimizer, modules, writer, global_iter):
             for key in view_keys(fields.get(pid, unlabelled)):
                 interval_max[key] = torch.maximum(interval_max[key], v)
         for key, (rel_max, grad_max) in interval_max.items():
+            ## Largest single-tensor relative step, lr * ||momentum buffer|| / ||w||
+            ## For LARS, should be ~lr * trust_coef * momentum amplification
+            ## Non-LARS should be more sensitive to the raw gradient
             put(key, "relative_step_interval_max", rel_max.item())
+            ## Largest single-tensor raw gradient norm (before decay and LARS scaling) since last log
             put(key, "grad_norm_interval_max", grad_max.item())
 
     # Snapshot medians from the most recent step.
@@ -226,13 +234,29 @@ def log_lars_diagnostics(optimizer, modules, writer, global_iter):
     # Aggregate quantities: sums over every tensor in the view.
     for key, (sq, init_sq, pre_sq, n_fallback) in totals.items():
         if init_sq > 0:  # all-zero-init views (e.g. residual gamma, biases) have no ratio
+            # Current L2 norm of the view relative to its norm at initialisation:
+            # sqrt(sum ||w||^2 / sum ||w_0||^2). Steady growth signals slow norm accumulation
             put(key, "l2_over_init", math.sqrt(sq / init_sq))
         if pre_sq > 0:
             log_rate = 0.5 * math.log(sq / pre_sq)
+            # Log of the view's norm ratio across this one step, log(||w_after|| / ||w_before||).
+            # Positive means the norm is growin
             put(key, "agg_log_rate_per_step", log_rate)
+        # Number of tensors in a LARS group whose trust ratio fell back to 1 because the
+        # weight or update norm was zero. These take an unscaled step at the full LARS LR,
+        # so this should be 0 after the first few steps.
         put(key, "fallback_count", n_fallback)
 
-    # Medians: every tensor counts equally.
+    # Median over tensors in the view (every tensor counts equally), latest step only:
+    #   relative_step_median: lr * ||momentum buffer|| / ||w||, the applied step size
+    #       relative to the weight.
+    #   decay_ratio_median:   weight_decay * ||w|| / ||grad||, the strength of weight decay
+    #       relative to the gradient. Near 0 means decay has no real effect.
+    #   radial_cos_median:    cosine between the applied update and w. Positive means the
+    #       step grows ||w||, negative means it shrinks it; persistently positive values
+    #       indicate norm growth.
+    #   trust_ratio_median:   trust_coef * ||w|| / ||grad + wd * w||, the per-tensor LR
+    #       multiplier LARS applies. LARS group only, since it is fixed at 1 for omit.
     for key, quantities in snapshot.items():
         for q, vals in quantities.items():
             v = torch.tensor(vals, dtype=torch.float64)
