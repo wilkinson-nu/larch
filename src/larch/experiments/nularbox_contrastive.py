@@ -275,6 +275,10 @@ def run_training(rank, local_rank, world_size, args):
         total_clust_align_tensor = torch.tensor(0.0, device=device)
         total_clust_unif_tensor = torch.tensor(0.0, device=device)
 
+        ## Monitoring issues with the representation
+        pool_counts = torch.zeros(2, device=device)  # missing events, broken pairs (summed)
+        pool_maxes = torch.zeros(2, device=device)   # zero-row frac, mostly-dead frac (interval max)
+        
         ## Add more monitoring tools
         nbuffer = 5
         buffer_enc = []
@@ -305,8 +309,19 @@ def run_training(rank, local_rank, world_size, args):
             cat_batch   = ME.SparseTensor(cat_bfeats, cat_bcoords, device=device)
 
             ## Now do the forward passes
-            encoded_batch = encoder(cat_batch, this_batch_size)
+            encoded_batch, valid_batch = encoder(cat_batch, this_batch_size)
 
+            ## Monitor potential issues with the representation
+            with torch.no_grad():
+                v1, v2 = valid_batch.chunk(2)
+                pair_ok = v1 & v2
+                dead_frac = (encoded_batch <= 0).float().mean(dim=1)   # per event
+                pool_counts += torch.stack([(~valid_batch).sum(), (~pair_ok).sum()]).float()
+                pool_maxes = torch.maximum(pool_maxes, torch.stack([
+                    (dead_frac == 1).float().mean(),    # events with an all-zero h
+                    (dead_frac > 0.9).float().mean(),   # events with >90% dead channels
+                ]))
+            
             if global_iter % args.extra_log_rate == 0 and args.extra_log_rate > 0:
                 with torch.no_grad():
                     hn = encoded_batch.detach().float().norm(dim=1)
@@ -381,15 +396,19 @@ def run_training(rank, local_rank, world_size, args):
 
             ## Update optimizer and scheduler
             optimizer.step()
-            if args.extra_log_rate > 0 and global_iter > 0 and global_iter % args.extra_log_rate == 0 and rank == 0:
-                modules = {"encoder": unwrap(encoder), "proj": unwrap(heads["proj"])}
-                if "clust" in heads: modules["clust"] = unwrap(heads["clust"])
-                log_lars_diagnostics(
-                    optimizer=optimizer,
-                    modules=modules,
-                    writer=writer,
-                    global_iter=global_iter,
-                )
+            if args.optimizer == 'lars' and \
+               args.extra_log_rate > 0 and \
+               global_iter > 0 and \
+               global_iter % args.extra_log_rate == 0 and \
+               rank == 0:
+                    modules = {"encoder": unwrap(encoder), "proj": unwrap(heads["proj"])}
+                    if "clust" in heads: modules["clust"] = unwrap(heads["clust"])
+                    log_lars_diagnostics(
+                        optimizer=optimizer,
+                        modules=modules,
+                        writer=writer,
+                        global_iter=global_iter,
+                    )
             
             ## ...after all that logging, finally update the scheduler...
             if scheduler: scheduler.step()
@@ -416,6 +435,9 @@ def run_training(rank, local_rank, world_size, args):
         dist.all_reduce(total_proj_unif_tensor, op=dist.ReduceOp.SUM)
         dist.all_reduce(total_clust_align_tensor, op=dist.ReduceOp.SUM)
         dist.all_reduce(total_clust_unif_tensor, op=dist.ReduceOp.SUM)        
+
+        dist.all_reduce(pool_counts, op=dist.ReduceOp.SUM)
+        dist.all_reduce(pool_maxes, op=dist.ReduceOp.MAX)
         
         av_tot_loss = tot_loss_tensor.item() / (nbatches * world_size)
         av_losses = {
@@ -484,6 +506,19 @@ def run_training(rank, local_rank, world_size, args):
             log_scalar(writer, metrics, 'loss/total', av_tot_loss, epoch)              
             log_scalar(writer, metrics, 'loss/proj', av_losses["proj"], epoch)
 
+            n_missing, n_bad_pairs = pool_counts.tolist()
+            zero_row, mostly_dead = pool_maxes.tolist()
+            # Events with no coordinates at pooling, summed over all ranks and steps since
+            # the last log. Should always be 0 given non-empty inputs.
+            writer.add_scalar("pool/n_missing_interval", n_missing, global_iter)
+            # Pairs dropped from the loss because either view was missing.
+            writer.add_scalar("pool/n_bad_pairs_interval", n_bad_pairs, global_iter)
+            # Worst-step fraction of events whose pooled features are all zero
+            # (functional death: coordinates exist, but every channel is non-positive).
+            writer.add_scalar("pool/zero_row_frac_interval_max", zero_row, global_iter)
+            # Worst-step fraction of events with more than 90% dead channels.
+            writer.add_scalar("pool/mostly_dead_frac_interval_max", mostly_dead, global_iter)
+            
             ## Add metrics for debugging/training diagnostics
             log_scalar(writer, metrics, 'monitor/proj_alignment', av_proj_align, epoch)
             log_scalar(writer, metrics, 'monitor/proj_uniformity', av_proj_unif, epoch)

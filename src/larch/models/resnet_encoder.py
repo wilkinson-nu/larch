@@ -220,8 +220,20 @@ class ResNetBase(nn.Module):
             ))
             self.inplanes = planes * block.expansion
         return nn.Sequential(*layers)
+
+    def pooled_to_dense(pooled, batch_size):
+        idx = pooled.C[:, 0].long()
+        h = pooled.F.new_zeros(batch_size, pooled.F.shape[1])
+        h[idx] = pooled.F
+        valid = torch.zeros(batch_size, dtype=torch.bool, device=h.device)
+        valid[idx] = True
+        return h, valid
     
-    def forward(self, x, batch_size=None):
+    def forward(self, x, batch_size):
+
+        ## Now required for debugging
+        if batch_size is None: raise ValueError("batch_size is required to detect missing events")
+
         x = self.stem(x)
         x = self.layer1(x)
         x = self.layer2(x)
@@ -230,14 +242,17 @@ class ResNetBase(nn.Module):
 
         ## Deal with optional concatenation of pooling options
         if self.pool == "both":
-            x = torch.cat([self.global_pool_avg(x).F, self.global_pool_max(x).F], dim=-1)
+            h_avg, v_avg = pooled_to_dense(self.global_pool_avg(x), batch_size)
+            h_max, v_max = pooled_to_dense(self.global_pool_max(x), batch_size)
+            h, valid = torch.cat([h_avg, h_max], dim=-1), v_avg & v_max
         else:
-            x = self.global_pool(x).F
+            h, valid = pooled_to_dense(self.global_pool(x), batch_size)
             
         ## Add the bottleneck if requested
         if self.bottleneck is not None:
-            x = self.bottleneck(x)
-        return x
+            z = self.bottleneck(h[valid])
+            h = z.new_zeros(batch_size, z.shape[1]).index_copy(0, valid.nonzero().squeeze(1), z)
+        return h, valid
 
     def get_pool_nchan(self):
         base = self.BLOCK.expansion * self.PLANES[-1]
