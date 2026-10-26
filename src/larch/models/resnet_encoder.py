@@ -242,11 +242,11 @@ class ResNetBase(nn.Module):
 
         ## Deal with optional concatenation of pooling options
         if self.pool == "both":
-            h_avg, v_avg = pooled_to_dense(self.global_pool_avg(x), batch_size)
-            h_max, v_max = pooled_to_dense(self.global_pool_max(x), batch_size)
+            h_avg, v_avg = self.pooled_to_dense(self.global_pool_avg(x), batch_size)
+            h_max, v_max = self.pooled_to_dense(self.global_pool_max(x), batch_size)
             h, valid = torch.cat([h_avg, h_max], dim=-1), v_avg & v_max
         else:
-            h, valid = pooled_to_dense(self.global_pool(x), batch_size)
+            h, valid = self.pooled_to_dense(self.global_pool(x), batch_size)
             
         ## Add the bottleneck if requested
         if self.bottleneck is not None:
