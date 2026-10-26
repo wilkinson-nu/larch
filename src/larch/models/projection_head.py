@@ -208,7 +208,7 @@ def get_projhead(nchan, args):
     elif args.proj_arch in ["logitsbn", "twobn"]:
         proj_head = ProjectionHeadTwoLayer(nchan, args.latent, args.nhidden, hidden_act_fn,
                                            apply_bn=True, init_bn=args.proj_init_bn, final_bn=args.proj_final_bn)
-    elif args.proj_arch == "twolayernoaffine":
+    elif args.proj_arch == "twobnnoaffine":
         proj_head = ProjectionHeadTwoLayer(nchan, args.latent, args.nhidden, hidden_act_fn, affine_bn=False,
                                            apply_bn=True, init_bn=args.proj_init_bn, final_bn=args.proj_final_bn)
     elif args.proj_arch == "three":
