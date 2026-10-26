@@ -48,6 +48,8 @@ def get_opt_and_sched(args, encoder, heads, total_steps, world_size, print_debug
         optimizer = torch.optim.AdamW(
             param_groups,
             lr=args.lr,
+            betas=(0.9, 0.95),
+            eps=1e-8,
         )
         if args.scheduler == "step":
             scheduler = optim.lr_scheduler.MultiStepLR(optimizer,
