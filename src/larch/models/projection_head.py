@@ -31,8 +31,7 @@ class ProjectionHeadTwoLayer(nn.Module):
                  hidden_act_fn : object = nn.ReLU,
                  apply_bn : bool = False,
                  affine_bn : bool = True,
-                 init_bn : bool = False,
-                 final_bn : bool = False):
+                 init_bn : bool = False):
         super().__init__()
 
         self.nchan = nchan
@@ -41,7 +40,6 @@ class ProjectionHeadTwoLayer(nn.Module):
         self.apply_bn = apply_bn
         self.affine_bn = affine_bn
         self.init_bn = init_bn
-        self.final_bn = final_bn
         self.hidden_act_fn = hidden_act_fn
         
         self.proj = self.make_network()
@@ -51,7 +49,6 @@ class ProjectionHeadTwoLayer(nn.Module):
         proj = OrderedDict()
         if self.init_bn:
             proj['norm0'] = nn.BatchNorm1d(self.nchan, affine=self.affine_bn)
-            proj['act0'] = self.hidden_act_fn()
             
         proj['lin1'] = nn.Linear(self.nchan, self.nhidden, bias=not self.apply_bn)
         if self.apply_bn:
@@ -59,8 +56,6 @@ class ProjectionHeadTwoLayer(nn.Module):
         proj['act1'] = self.hidden_act_fn()
 
         proj['lin2'] = nn.Linear(self.nhidden, self.nlatent, bias=False)
-        if self.apply_bn and self.final_bn:
-            proj['norm2'] = nn.BatchNorm1d(self.nlatent, affine=False)
 
         return nn.Sequential(proj)
 
@@ -87,15 +82,12 @@ class ProjectionHeadTwoLayer(nn.Module):
         ## Separate execution so hidden layers can be returned
         if self.init_bn:
             x = self.proj.norm0(x)
-            x = self.proj.act0(x)
 
         h1 = self.proj.lin1(x)
         if self.apply_bn: h1 = self.proj.norm1(h1)
         h1 = self.proj.act1(h1)
 
         out = self.proj.lin2(h1)
-        if self.apply_bn and self.final_bn:
-            out = self.proj.norm2(out)
 
         if return_hidden:
             return {"proj_layer1": h1,
@@ -109,8 +101,9 @@ class ProjectionHeadThreeLayer(nn.Module):
                  nlatent: int,
                  nhidden: int,
                  hidden_act_fn : object = nn.ReLU,
-                 apply_bn : bool = False,
-                 affine_bn : bool = True,
+                 apply_bn : bool = True,
+                 apply_bn_layer1 : bool = True,
+                 affine_bn : bool = False,
                  init_bn : bool = False,
                  final_bn : bool = False):
         super().__init__()
@@ -120,9 +113,9 @@ class ProjectionHeadThreeLayer(nn.Module):
         self.nlatent = nlatent
         self.nhidden = nhidden
         self.apply_bn = apply_bn
+        self.apply_bn_layer1 = apply_bn_layer1
         self.affine_bn = affine_bn
         self.init_bn = init_bn
-        self.final_bn = final_bn
         self.hidden_act_fn = hidden_act_fn
 
         self.proj = self.make_network()
@@ -132,10 +125,9 @@ class ProjectionHeadThreeLayer(nn.Module):
         proj = OrderedDict()
         if self.init_bn:
             proj['norm0'] = nn.BatchNorm1d(self.nchan, affine=self.affine_bn)
-            proj['act0'] = self.hidden_act_fn()
                 
-        proj['lin1'] = nn.Linear(self.nchan, self.nhidden, bias=not self.apply_bn)
-        if self.apply_bn:
+        proj['lin1'] = nn.Linear(self.nchan, self.nhidden, bias=not (self.apply_bn and self.apply_bn_layer1))
+        if self.apply_bn and self.apply_bn_layer1:
             proj['norm1'] = nn.BatchNorm1d(self.nhidden, affine=self.affine_bn)
         proj['act1'] = self.hidden_act_fn()
 
@@ -145,8 +137,6 @@ class ProjectionHeadThreeLayer(nn.Module):
         proj['act2'] = self.hidden_act_fn()
 
         proj['lin3'] = nn.Linear(self.nhidden, self.nlatent, bias=False)
-        if self.apply_bn and self.final_bn:
-            proj['norm3'] = nn.BatchNorm1d(self.nlatent, affine=False)
 
         return nn.Sequential(proj)
         
@@ -174,7 +164,6 @@ class ProjectionHeadThreeLayer(nn.Module):
         ## Separate execution so hidden layers can be returned
         if self.init_bn:
             x = self.proj.norm0(x)
-            x = self.proj.act0(x)
 
         h1 = self.proj.lin1(x)
         if self.apply_bn: h1 = self.proj.norm1(h1)
@@ -185,8 +174,6 @@ class ProjectionHeadThreeLayer(nn.Module):
         h2 = self.proj.act2(h2)
 
         out = self.proj.lin3(h2)
-        if self.apply_bn and self.final_bn:
-            out = self.proj.norm3(out)
 
         if return_hidden:
             return {"proj_layer1": h1,
@@ -204,22 +191,25 @@ def get_projhead(nchan, args):
     
     if args.proj_arch in ["logits", "two"]:
         proj_head = ProjectionHeadTwoLayer(nchan, args.latent, args.nhidden, hidden_act_fn,
-                                           apply_bn=False, init_bn=args.proj_init_bn, final_bn=args.proj_final_bn)
+                                           apply_bn=False, init_bn=args.proj_init_bn)
     elif args.proj_arch in ["logitsbn", "twobn"]:
         proj_head = ProjectionHeadTwoLayer(nchan, args.latent, args.nhidden, hidden_act_fn,
-                                           apply_bn=True, init_bn=args.proj_init_bn, final_bn=args.proj_final_bn)
+                                           apply_bn=True, init_bn=args.proj_init_bn)
     elif args.proj_arch == "twobnnoaffine":
         proj_head = ProjectionHeadTwoLayer(nchan, args.latent, args.nhidden, hidden_act_fn, affine_bn=False,
-                                           apply_bn=True, init_bn=args.proj_init_bn, final_bn=args.proj_final_bn)
+                                           apply_bn=True, init_bn=args.proj_init_bn)
     elif args.proj_arch == "three":
         proj_head = ProjectionHeadThreeLayer(nchan, args.latent, args.nhidden, hidden_act_fn,
-                                             apply_bn=False, init_bn=args.proj_init_bn, final_bn=args.proj_final_bn)
+                                             apply_bn=False, init_bn=args.proj_init_bn)
     elif args.proj_arch == "threebn":
         proj_head = ProjectionHeadThreeLayer(nchan, args.latent, args.nhidden, hidden_act_fn,
-                                             apply_bn=True, init_bn=args.proj_init_bn, final_bn=args.proj_final_bn)
+                                             apply_bn=True, init_bn=args.proj_init_bn)
     elif args.proj_arch == "threebnnoaffine":
         proj_head = ProjectionHeadThreeLayer(nchan, args.latent, args.nhidden, hidden_act_fn, affine_bn=False,
-                                             apply_bn=True, init_bn=args.proj_init_bn, final_bn=args.proj_final_bn)
+                                             apply_bn=True, init_bn=args.proj_init_bn)
+    elif args.proj_arch == "threehalfbnnoaffine":
+        proj_head = ProjectionHeadThreeLayer(nchan, args.latent, args.nhidden, hidden_act_fn, affine_bn=False,
+                                             apply_bn=True, apply_bn_layer1=False, init_bn=args.proj_init_bn)    
     elif args.proj_arch == "one":
         proj_head = ProjectionHeadOneLayer(nchan, args.latent)
     return proj_head
