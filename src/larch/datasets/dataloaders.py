@@ -69,14 +69,17 @@ def build_paired_training_data(*,
                                data_dir,
                                start,
                                nevents,
-                               transform,
+                               aug_transform,
+                               nom_transform,
                                rank,
                                world_size,
                                batch_size,
                                num_workers,
                                seed):
     
-    dataset = paired_2d_dataset_ME(data_dir, aug_transform=transform,
+    dataset = paired_2d_dataset_ME(data_dir,
+                                   nom_transform=nom_transform,
+                                   aug_transform=aug_transform,
                                    max_events=start+nevents)
 
     if len(dataset) < start+nevents:
@@ -106,7 +109,8 @@ def build_monitoring_data(*,
                           data_dir,
                           nbank,
                           nquery,
-                          transform,
+                          aug_transform,
+                          nom_transform,
                           collate_fn,
                           rank,
                           world_size,
@@ -122,7 +126,10 @@ def build_monitoring_data(*,
     query_range, bank_range, _ = monitoring_ranges(nquery, nbank)
     required_events = bank_range.stop
 
-    full_dataset = single_2d_dataset_ME(data_dir, transform=transform, max_events=required_events)
+    full_dataset = single_2d_dataset_ME(data_dir,
+                                        aug_transform=aug_transform,
+                                        nom_transform=nom_transform,
+                                        max_events=required_events)
 
     if len(full_dataset) < required_events:
         raise ValueError(f"Monitoring requires {required_events} total events, "
@@ -153,7 +160,8 @@ def build_labelled_training_data(*,
                                  data_dir,
                                  start,
                                  nevents,
-                                 transform,
+                                 aug_transform,
+                                 nom_transform,
                                  collate_fn,
                                  rank,
                                  world_size,
@@ -161,7 +169,10 @@ def build_labelled_training_data(*,
                                  num_workers,
                                  seed):
 
-    dataset = single_2d_dataset_ME(data_dir, transform=transform, max_events=start+nevents)
+    dataset = single_2d_dataset_ME(data_dir,
+                                   aug_transform=aug_transform,
+                                   nom_transform=nom_transform,
+                                   max_events=start+nevents)
 
     if len(dataset) < start + nevents:
         raise ValueError(f"Requested events [{start}, {start + nevents}), "

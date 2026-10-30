@@ -10,11 +10,17 @@ from collections import OrderedDict
 from collections.abc import Mapping
 
 ## A slightly temporary hack to get high-level event info in
-def reco_summaries(coords, feats):
+def reco_summaries(nom_coords,
+                   nom_feats,
+                   raw_coords,
+                   raw_feats):
     return {
-        "nhits": len(coords),
-        "qmax":  float(feats.max()),
-        "qsum":  float(feats.sum()),
+        "nhits": len(nom_coords),
+        "qmax":  float(nom_feats.max()),
+        "qsum":  float(nom_feats.sum()),
+        "nhits_raw": len(raw_coords),
+        "qmax_raw":  float(raw_feats.max()),
+        "qsum_raw":  float(raw_feats.sum()),        
     }
 
 class paired_2d_dataset_ME(Dataset):
@@ -88,9 +94,9 @@ class paired_2d_dataset_ME(Dataset):
             self._offsets.pop(old_idx, None)
         return h
 
-    def apply_aug_with_retry(self, coords, feats, max_retries=100):
+    def apply_aug_with_retry(self, transform, coords, feats, max_retries=100):
         for _ in range(max_retries):
-            out_coords, out_feats = self.aug_transform(coords, feats)
+            out_coords, out_feats = self._apply_transform(transform, coords, feats)
             if out_feats.size > 0:
                 return out_coords, out_feats
         ## If no valid augmentation has been found, bail
@@ -122,19 +128,15 @@ class paired_2d_dataset_ME(Dataset):
         ## Apply a nom_transform if it exists
         nom_coords, nom_feats = self._apply_transform(self.nom_transform, raw_coords, raw_feats)
 
-        ## Apply transforms to augment the data
-        if not self.aug_transform:
-            aug1_coords,aug1_feats = raw_coords,raw_feats
-            aug2_coords,aug2_feats = raw_coords,raw_feats
-        else:
-            ## Make sure the images aren't empty...            
-            aug1_coords, aug1_feats = self.apply_aug_with_retry(raw_coords, raw_feats)
-            aug2_coords, aug2_feats = self.apply_aug_with_retry(raw_coords, raw_feats)
+        ## Apply augmentations, ensure images are not empty
+        aug1_coords, aug1_feats = self.apply_aug_with_retry(self.aug_transform, raw_coords, raw_feats)
+        aug2_coords, aug2_feats = self.apply_aug_with_retry(self.aug_transform, raw_coords, raw_feats)
 
-        ## Finally, save some raw labels
-        raw_labels = reco_summaries(raw_coords, raw_feats)
+        ## Finally, save some labels
+        labels = reco_summaries(nom_coords, nom_feats,
+                                raw_coords, raw_feats)
             
-        return aug1_coords, aug1_feats, aug2_coords, aug2_feats, nom_coords, nom_feats, raw_labels
+        return aug1_coords, aug1_feats, aug2_coords, aug2_feats, nom_coords, nom_feats, labels
 
     
 def triple_ME_collate_fn(batch):
@@ -165,7 +167,7 @@ def cat_ME_collate_fn(batch):
     # Concatenate all lists
     cat_bfeats = torch.from_numpy(np.concatenate(feats_list, axis=0)).float()
 
-    # Batch the raw labels
+    # Batch the labels
     batch_labels = {
         key: torch.from_numpy(np.array([lab[key] for lab in labels], dtype=np.float32))
         for key in labels[0]
@@ -178,7 +180,8 @@ class single_2d_dataset_ME(Dataset):
 
     def __init__(self,
                  infile_dir,
-                 transform,
+                 nom_transform=None,
+                 aug_transform=None,
                  max_events=None,
                  return_metadata=False,
                  projection="xz",
@@ -207,8 +210,13 @@ class single_2d_dataset_ME(Dataset):
         ## Apply some limitation to the size
         if self.max_events and max_events < self.length:
             self.length = self.max_events
-
             
+    @staticmethod
+    def _apply_transform(transform, coords, feats):
+        if transform is None:
+            return coords, feats
+        return transform(coords, feats)
+    
     def create_file_indices(self):
         cumulative_size = 0
         
@@ -270,13 +278,9 @@ class single_2d_dataset_ME(Dataset):
 
         return handle
 
-    def apply_aug_with_retry(self, coords, feats, max_retries=100):
-
-        if self.transform is None:
-            return coords, feats
-        
+    def apply_aug_with_retry(self, transform, coords, feats, max_retries=100):
         for _ in range(max_retries):
-            out_coords, out_feats = self.transform(coords, feats)
+            out_coords, out_feats = self._apply_transform(transform, coords, feats)
             if out_feats.size > 0:
                 return out_coords, out_feats
         ## If no valid augmentation has been found, bail
@@ -310,22 +314,25 @@ class single_2d_dataset_ME(Dataset):
             row = dsets[f"{self.proj}_row"][start:end]
             col = dsets[f"{self.proj}_col"][start:end]
             raw_coords = np.column_stack((row, col))
-            
-        coords, feats = self.apply_aug_with_retry(raw_coords, raw_feats)
+
+        ## Apply augmentations
+        nom_coords, nom_feats = self._apply_transform(self.nom_transform, raw_coords, raw_feats)
+        aug_coords, aug_feats = self.apply_aug_with_retry(self.aug_transform, raw_coords, raw_feats)
 
         labels = {
             "particle_truth": dsets["particle_truth"][this_idx],
             "particle_visible": dsets["particle_visible"][this_idx],
             "event": dsets["event_labels"][this_idx],
-            "reco": reco_summaries(raw_coords, raw_feats),
+            "reco": reco_summaries(nom_coords, nom_feats,
+                                   raw_coords, raw_feats),
         }
         
         if self.return_metadata:
             filename = os.path.basename(self.hdf5_files[file_index])
             event_id = int(dsets["event_id"][this_idx])
-            return coords, feats, labels, filename, event_id
+            return aug_coords, aug_feats, labels, filename, event_id
         
-        return coords, feats, labels        
+        return aug_coords, aug_feats, labels        
 
     def close(self):
         for handle in self._handles.values():
