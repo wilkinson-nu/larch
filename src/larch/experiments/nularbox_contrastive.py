@@ -143,12 +143,15 @@ def run_training(rank, local_rank, world_size, args):
         args.aug_val,
     )
     
+    nom_transform =  get_transform(args.out_image_size, "no_aug", 1)
+    
     _, _, train_start = monitoring_ranges(args.monitor_nquery, args.monitor_nbank)
     train_dataset, train_loader = build_paired_training_data(
         data_dir=args.data_dir,
         start=train_start,
         nevents=args.nevents,
-        transform=train_transform,
+        aug_transform=train_transform,
+        nom_transform=nom_transform,
         rank=rank,
         world_size=world_size,
         batch_size=args.batch_size,
@@ -180,7 +183,8 @@ def run_training(rank, local_rank, world_size, args):
         data_dir=args.data_dir,
         nbank=args.monitor_nbank,
         nquery=args.monitor_nquery,
-        transform=monitor_transform,
+        aug_transform=monitor_transform,
+        nom_transform=nom_transform,
         collate_fn=monitor_collate,
         rank=rank,
         world_size=world_size,

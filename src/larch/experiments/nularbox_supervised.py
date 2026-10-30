@@ -105,6 +105,8 @@ def run_training(rank, local_rank, world_size, args):
         args.aug_val,
     )
 
+    nom_transform =  get_transform(args.out_image_size, "no_aug", 1)
+    
     ## Apply maxima to the N. particle groups of interest
     nested_label_clamp = {
         name: label_clamp(MULTIPLICITY_TARGETS)
@@ -122,7 +124,8 @@ def run_training(rank, local_rank, world_size, args):
         data_dir=args.data_dir,
         start=train_start,
         nevents=args.nevents,
-        transform=train_transform,
+        aug_transform=train_transform,
+        nom_transform=nom_transform,
         rank=rank,
         world_size=world_size,
         batch_size=args.batch_size,
@@ -139,7 +142,8 @@ def run_training(rank, local_rank, world_size, args):
         data_dir=args.data_dir,
         nbank=args.monitor_nbank,
         nquery=args.monitor_nquery,
-        transform=monitor_transform,
+        aug_transform=monitor_transform,
+        nom_transform=nom_transform,
         collate_fn=labelled_collate,
         rank=rank,
         world_size=world_size,
