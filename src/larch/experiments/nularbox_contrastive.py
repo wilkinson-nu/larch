@@ -74,6 +74,14 @@ def run_training(rank, local_rank, world_size, args):
     ## Setup the encoder
     encoder = get_encoder(args)
     encoder = ME.MinkowskiSyncBatchNorm.convert_sync_batchnorm(encoder)
+
+    if args.freeze_gamma:
+        residual = {id(p) for p in encoder.residual_gammas()}
+        for m in encoder.modules():
+            bn = getattr(m, "bn", m)
+            if isinstance(bn, nn.modules.batchnorm._BatchNorm) and bn.affine:
+                if id(bn.weight) not in residual:
+                    bn.weight.requires_grad_(False)   # stays at its init value of 1
     
     encoder_nchan = encoder.get_nchan()
     encoder .to(device)
@@ -261,7 +269,7 @@ def run_training(rank, local_rank, world_size, args):
         tot_loss_tensor = torch.tensor(0.0, device=device)  
         losses_tensor = {name: torch.tensor(0.0, device=device) for name in heads.keys()}       
         entropy_tensor = torch.tensor(0.0, device=device)
-
+        
         ## This is only used by VICReg for now
         proj_part_sums = None
         proj_part_names = None
@@ -310,7 +318,7 @@ def run_training(rank, local_rank, world_size, args):
 
             ## Now do the forward passes
             encoded_batch, valid_batch = encoder(cat_batch, this_batch_size)
-
+            
             ## Monitor potential issues with the representation
             with torch.no_grad():
                 v1, v2 = valid_batch.chunk(2)
@@ -322,16 +330,29 @@ def run_training(rank, local_rank, world_size, args):
                     (dead_frac > 0.9).float().mean(),   # events with >90% dead channels
                 ]))
             
-            if global_iter % args.extra_log_rate == 0 and args.extra_log_rate > 0:
+            if args.extra_log_rate > 0 and global_iter % args.extra_log_rate == 0:
                 with torch.no_grad():
-                    hn = encoded_batch.detach().float().norm(dim=1)
+                    h = encoded_batch.detach().float()
+                    hn = h.norm(dim=1)
                     gathered = [torch.zeros_like(hn) for _ in range(world_size)]
                     dist.all_gather(gathered, hn.contiguous())
                     allhn = torch.cat(gathered)
+
+                    h_sum = h.sum(0)
+                    dist.all_reduce(h_sum)
+                    mu = h_sum / (h.shape[0] * world_size)
+                    
                     if rank == 0:
                         q = torch.quantile(allhn, torch.tensor([0, 0.01, 0.1, 0.5, 0.9, 0.99, 1.0], device=allhn.device))
                         for name, v in zip(['min', 'p1', 'p10', 'p50', 'p90', 'p99', 'max'], q.cpu()):
                             log_scalar(writer, metrics, f'hnorm/{name}', v.item(), global_iter)
+
+                        mean_sq = allhn.pow(2).mean()
+                        mu_sq = mu.pow(2).sum()
+                        # Fraction of h's energy shared by all events (1 = every event identical)
+                        log_scalar(writer, metrics, f'hnorm/common_frac', (mu_sq / mean_sq).item(), global_iter)
+                        # RMS size of the event-specific part: mean ||h||^2 = ||mu||^2 + mean ||h - mu||^2
+                        log_scalar(writer, metrics, f'hnorm/resid_rms', (mean_sq - mu_sq).clamp_min(0).sqrt().item(), global_iter)
             
             ## L2 norm the encoder
             if norm_encoder: encoded_batch = torch.nn.functional.normalize(encoded_batch, p=2, dim=1)
@@ -343,7 +364,7 @@ def run_training(rank, local_rank, world_size, args):
                 
             tot_loss = proj_loss
             losses_tensor["proj"] += proj_loss.detach()
-
+            
             ## This is for VICReg for now
             if proj_part_names is None:
                 proj_part_names = tuple(sorted(proj_loss_parts))
@@ -396,19 +417,17 @@ def run_training(rank, local_rank, world_size, args):
 
             ## Update optimizer and scheduler
             optimizer.step()
-            if args.optimizer == 'lars' and \
-               args.extra_log_rate > 0 and \
+            if args.extra_log_rate > 0 and \
                global_iter > 0 and \
                global_iter % args.extra_log_rate == 0 and \
                rank == 0:
-                    modules = {"encoder": unwrap(encoder), "proj": unwrap(heads["proj"])}
-                    if "clust" in heads: modules["clust"] = unwrap(heads["clust"])
-                    log_lars_diagnostics(
-                        optimizer=optimizer,
-                        modules=modules,
-                        writer=writer,
-                        global_iter=global_iter,
-                    )
+                modules = {"encoder": unwrap(encoder), "proj": unwrap(heads["proj"])}
+                if "clust" in heads: modules["clust"] = unwrap(heads["clust"])
+
+                if args.optimizer == 'lars':
+                    log_lars_diagnostics(optimizer, modules, writer, global_iter)
+
+                log_weight_norms(optimizer, modules, writer, global_iter)
             
             ## ...after all that logging, finally update the scheduler...
             if scheduler: scheduler.step()
@@ -505,7 +524,8 @@ def run_training(rank, local_rank, world_size, args):
             metrics["epoch"].append(epoch)
             log_scalar(writer, metrics, 'loss/total', av_tot_loss, epoch)              
             log_scalar(writer, metrics, 'loss/proj', av_losses["proj"], epoch)
-
+            
+            ## Probably can all go
             n_missing, n_bad_pairs = pool_counts.tolist()
             zero_row, mostly_dead = pool_maxes.tolist()
             # Events with no coordinates at pooling, summed over all ranks and steps since
@@ -525,11 +545,6 @@ def run_training(rank, local_rank, world_size, args):
             log_scalar(writer, metrics, 'monitor/enc_alignment', av_enc_align, epoch)
             log_scalar(writer, metrics, 'monitor/enc_uniformity', av_enc_unif, epoch)
                 
-            ## Logging for gradient debugging
-            modules = {"encoder": unwrap(encoder), "proj": unwrap(heads["proj"])}
-            if "clust" in heads: modules["clust"] = unwrap(heads["clust"])            
-            log_weight_norms(optimizer, modules, writer, epoch)
-            
             ## More summary quantities about the encoder and projection spaces
             for name, value in enc_geom.items():
                 log_scalar(writer, metrics, f"eigen/enc_{name}", value, epoch)
@@ -684,6 +699,9 @@ def build_parser():
     parser.add_argument('--enc_final_linear', type=int)
     parser.add_argument('--enc_stem_channels', type=int)
 
+    ## TEMP
+    parser.add_argument('--freeze_gamma', type=int)
+    
     ## (Optional) clustering head
     parser.add_argument('--clust_arch', type=str)
     parser.add_argument('--clust_temp', type=float)
