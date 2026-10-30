@@ -221,7 +221,7 @@ class ResNetBase(nn.Module):
             self.inplanes = planes * block.expansion
         return nn.Sequential(*layers)
 
-    def pooled_to_dense(pooled, batch_size):
+    def pooled_to_dense(self, pooled, batch_size):
         idx = pooled.C[:, 0].long()
         h = pooled.F.new_zeros(batch_size, pooled.F.shape[1])
         h[idx] = pooled.F
