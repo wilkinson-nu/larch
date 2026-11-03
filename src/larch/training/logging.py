@@ -199,7 +199,43 @@ def log_weight_norms(optimizer, modules, writer, iteration, near_zero_gamma=0.05
             for (qname, _), val in zip(BN_QUANTILES, row):
                 # Distribution over channels of this BN parameter type in this layer.
                 writer.add_scalar(f"{k}/{qname}", val, iteration)
-        
+
+HEAD_ROW_Q = (("p50", 0.5), ("p99", 0.99), ("max", 1.0))                
+@torch.no_grad()                
+def log_head_weights(head, writer, iteration, spectral=False):
+    """
+    head: the projector module (unwrap DDP first, e.g. model.module.projector).
+    Logs per-Linear Frobenius norm and output-row norm quantiles.
+    With spectral=True, also logs the top singular value and stable rank.
+    """
+    if writer is None: return
+
+    linears = [m for m in head.modules() if isinstance(m, torch.nn.Linear)]
+    q = torch.tensor([p for _, p in HEAD_ROW_Q])
+
+    stats = []
+    for lin in linears:
+        w = lin.weight.detach().float()            # (out, in)
+        rn = w.norm(dim=1)                         # one norm per output unit
+        s = [w.norm(), *torch.quantile(rn, q.to(rn.device))]
+        if spectral:
+            s.append(torch.linalg.matrix_norm(w, ord=2))
+        stats.append(torch.stack(s))
+    out = torch.stack(stats).cpu().tolist()        # single GPU->CPU transfer
+
+    for i, row in enumerate(out):
+        name = "final" if i == len(linears) - 1 else f"lin{i}"
+        fro, rows, rest = row[0], row[1:1 + len(HEAD_ROW_Q)], row[1 + len(HEAD_ROW_Q):]
+        writer.add_scalar(f"head/{name}/fro", fro, iteration)
+        for (qn, _), v in zip(HEAD_ROW_Q, rows):
+            writer.add_scalar(f"head/{name}/row_{qn}", v, iteration)
+        writer.add_scalar(f"head/{name}/row_max_over_p50", rows[-1] / rows[0], iteration)
+        if spectral:
+            sig = rest[0]
+            writer.add_scalar(f"head/{name}/sigma_max", sig, iteration)
+            # Effective number of directions carrying the weight's energy
+            writer.add_scalar(f"head/{name}/stable_rank", fro**2 / sig**2, iteration)
+            
 @torch.no_grad()
 def log_lars_diagnostics(optimizer, modules, writer, global_iter):
     """Log LARS diagnostics aggregated under each view in VIEWS.

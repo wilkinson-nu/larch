@@ -21,7 +21,7 @@ from larch.models.resnet_encoder import get_encoder
 from larch.models.projection_head import get_projhead
 from larch.models.clustering_head import get_clusthead
 from larch.metrics import argmax_consistency, uniformity, alignment, simclr_geometry_metrics
-from larch.training.logging import log_scalar, log_weight_norms, log_lars_diagnostics
+from larch.training.logging import log_scalar, log_weight_norms, log_lars_diagnostics, log_head_weights
 from larch.optim.scheduling import get_opt_and_sched, update_weight_decay
 
 ## Import datasets
@@ -457,7 +457,8 @@ def run_training(rank, local_rank, world_size, args):
                     log_lars_diagnostics(optimizer, modules, writer, global_iter)
 
                 log_weight_norms(optimizer, modules, writer, global_iter)
-            
+                log_head_weights(unwrap(heads["proj"]), writer, global_iter)
+                
             ## ...after all that logging, finally update the scheduler...
             if scheduler: scheduler.step()
 
