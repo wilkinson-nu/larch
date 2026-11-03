@@ -16,7 +16,8 @@ def extract_features(encoder, loader, device):
         bcoords = bcoords.to(device, non_blocking=True)
         bfeats  = bfeats.to(device,  non_blocking=True)
         batch   = ME.SparseTensor(bfeats, bcoords, device=device)
-        feats.append(model(batch, bs).float())
+        f, _ = model(batch, bs)
+        feats.append(f.float())
 
         if labels is None:
             labels = {group: {name: [] for name in names} for group, names in blabels.items()}
