@@ -190,7 +190,8 @@ class single_2d_dataset_ME(Dataset):
         self.infile_dir = os.path.expandvars(infile_dir)
         self.hdf5_files = sorted(glob(os.path.join(self.infile_dir, '*.h5')))
         self.file_indices = []
-        self.transform = transform
+        self.nom_transform = nom_transform
+        self.aug_transform = aug_transform
         self.max_events = max_events
         self.return_metadata = return_metadata
 
