@@ -594,7 +594,8 @@ def run_training(rank, local_rank, world_size, args):
         if rank==0 and epoch%args.checkpoint_every == 0 and epoch != 0 and args.checkpoint_every > 0:
             ckpt_file = state_file.with_name(f"{state_file.name}.check{epoch:03d}")
             ## For now, don't save the optimizer state to keep things small
-            save_checkpoint(encoder, heads, None, None, ckpt_file, epoch, metrics, args)
+            save_checkpoint(encoder, heads, optimizer, scheduler, ckpt_file, epoch, metrics, args)
+            # save_checkpoint(encoder, heads, None, None, ckpt_file, epoch, metrics, args)
             
 
         ## Add per GPU logging
