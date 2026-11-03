@@ -42,6 +42,8 @@ enc_layer1_norm: 1
 enc_final_linear: -1       # -1 -> no extra linear layer
 enc_stem_channels: 64
 
+freeze_gamma: 0
+
 ## ---- optional contrastive clustering head ----
 clust_arch: "none"   # This controls whether there actually is one
 clust_temp: 0.5 ## This is used in the contrastive clustering loss
