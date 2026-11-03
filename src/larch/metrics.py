@@ -44,7 +44,13 @@ def geometry_metrics(buffer, device, normalize=True, sim_stats=True):
     dim = buffer[0].shape[1]
     ssum = torch.zeros(dim, dtype=torch.float64, device=device)
     smat = torch.zeros(dim, dim, dtype=torch.float64, device=device)
-    cov = torch.zeros(dim, dim, device=device)
+
+    ## Add separate views
+    ssum_m = torch.zeros(dim, dtype=torch.float64, device=device)
+    smat_m = torch.zeros(dim, dim, dtype=torch.float64, device=device)
+    ssum_d = torch.zeros(dim, dtype=torch.float64, device=device)
+    smat_d = torch.zeros(dim, dim, dtype=torch.float64, device=device)
+    
     n = 0
     
     ## Keep track of values
@@ -72,6 +78,13 @@ def geometry_metrics(buffer, device, normalize=True, sim_stats=True):
         dist.all_gather(gj, z_cat[B:].contiguous())
         z_i_all, z_j_all = torch.cat(gi), torch.cat(gj)
         N = z_i_all.shape[0]
+
+        ## Compare different views
+        m = 0.5 * (z_i_all + z_j_all).double()
+        d = 0.5 * (z_i_all - z_j_all).double()
+        ssum_m += m.sum(0); smat_m += m.T @ m
+        ssum_d += d.sum(0); smat_d += d.T @ d
+
         z_all = torch.cat([z_i_all, z_j_all], dim=0)
         
         #######################
@@ -104,7 +117,7 @@ def geometry_metrics(buffer, device, normalize=True, sim_stats=True):
     ## Now calculate the covariance info
     mu = ssum / n
     cov = (smat - n * torch.outer(mu, mu)) / (n - 1)
-    eigvals = torch.linalg.eigvalsh(cov)
+    eigvals = torch.linalg.eigvalsh(cov).clamp(min=0)
     deff = (eigvals.sum() ** 2) / (eigvals.pow(2).sum())
     l1_ratio = eigvals.max() / eigvals.sum()
 
@@ -113,11 +126,24 @@ def geometry_metrics(buffer, device, normalize=True, sim_stats=True):
     p = s / s.sum() + 1e-7
     rankme = torch.exp(-(p * p.log()).sum())
 
+    def _l1(ssum, smat, n):
+        mu = ssum / n
+        c = (smat - n * torch.outer(mu, mu)) / (n - 1)
+        e = torch.linalg.eigvalsh(c).clamp_min(0)
+        return e[-1] / e.sum()
+
+    ## Calculate mean and different l1_ratio between the two views
+    mean_l1_ratio = _l1(ssum_m, smat_m, n // 2)
+    diff_l1_ratio = _l1(ssum_d, smat_d, n // 2)
+    
+    
     ## Return without sim_stats
     out = {
         "deff": deff.item(),
         "rankme": rankme.item(),
         "l1_ratio": l1_ratio,
+        "l1_ratio_mean": mean_l1_ratio,
+        "l1_ratio_diff": diff_l1_ratio,        
         **{
             f"lambda{i}": val.item()
             for i, val in enumerate(eigvals.flip(0)[:10])

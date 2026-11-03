@@ -486,9 +486,12 @@ def run_training(rank, local_rank, world_size, args):
             }
         
         ## Other geometry calculations
-        enc_geom = simclr_geometry_metrics(buffer_enc, device)
-        proj_geom = simclr_geometry_metrics(buffer_proj, device)
+        enc_geom = simclr_geometry_metrics(buffer_enc, device, normalize=True)
+        proj_geom = simclr_geometry_metrics(buffer_proj, device, normalize=True)
 
+        enc_geom_nonorm = simclr_geometry_metrics(buffer_enc, device, normalize=False)
+        proj_geom_nonorm = simclr_geometry_metrics(buffer_proj, device, normalize=False)
+        
         ## kNN and linear probe monitoring
         is_last_epoch = (epoch == nepoch - 1)
         run_knn = args.knn_every > 0 and (epoch % args.knn_every == 0 or is_last_epoch)
@@ -554,6 +557,11 @@ def run_training(rank, local_rank, world_size, args):
                 log_scalar(writer, metrics, f"eigen/enc_{name}", value, epoch)
             for name, value in proj_geom.items():
                 log_scalar(writer, metrics, f"eigen/proj_{name}", value, epoch)                
+            
+            for name, value in enc_geom_nonorm.items():
+                log_scalar(writer, metrics, f"eigen_nonorm/enc_{name}", value, epoch)
+            for name, value in proj_geom_nonorm.items():
+                log_scalar(writer, metrics, f"eigen_nonorm/proj_{name}", value, epoch)
                 
             if "clust" in heads:
                 log_scalar(writer, metrics, 'loss/clust', av_losses["clust"]+av_entropy, epoch)
