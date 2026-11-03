@@ -262,6 +262,11 @@ def run_training(rank, local_rank, world_size, args):
             with_stack=True,
         )
         prof.__enter__()
+
+    ## Setup additional logging
+    extra_log_rate = args.extra_log_rate
+    extra_logging = bool(log_every > 0)
+    extra_logging_loss_vals = []
         
     ## Loop over the desired epochs
     for epoch in range(start_epoch, nepoch):
@@ -334,7 +339,7 @@ def run_training(rank, local_rank, world_size, args):
                     (dead_frac > 0.9).float().mean(),   # events with >90% dead channels
                 ]))
             
-            if args.extra_log_rate > 0 and global_iter % args.extra_log_rate == 0:
+            if extra_logging and global_iter % extra_log_rate == 0:
                 with torch.no_grad():
                     h = encoded_batch.detach().float()
                     hn = h.norm(dim=1)
@@ -365,23 +370,43 @@ def run_training(rank, local_rank, world_size, args):
             proj_batch = heads["proj"](encoded_batch)
             strat_key = torch.log10(batch_labels["nhits"].clamp_min(1e-6))
             proj_loss, proj_loss_parts = loss_fns["proj"](proj_batch, strat_key)
-                
+
             tot_loss = proj_loss
             losses_tensor["proj"] += proj_loss.detach()
             
             ## This is for VICReg for now
             if proj_part_names is None:
                 proj_part_names = tuple(sorted(proj_loss_parts))
-                proj_part_sums = torch.zeros(
-                    len(proj_part_names),
-                    device=device,
-                    dtype=torch.float64,
-                )
-            proj_part_sums += torch.stack([
+                
+            proj_step_vals = torch.stack([
                 proj_loss_parts[name].detach().double()
                 for name in proj_part_names
-            ])
+            ])            
+            proj_part_sums = proj_step_vals.clone() if proj_part_sums is None else proj_part_sums + proj_step_vals
+
+
+            ## Log additional loss info
+            if extra_logging:
+                extra_logging_loss_vals.append(proj_step_vals)
+                
+                if global_iter % extra_log_rate == 0:
+                    loss_vals = torch.stack(extra_logging_loss_vals)
+                    gathered = [torch.empty_like(loss_vals) for _ in range(world_size)]
+                    dist.all_gather(gathered, loss_vals)
+                    loss_vals = torch.cat(gathered)
                     
+                    if rank == 0:
+                        mean = loss_vals.mean(0)
+                        mx = loss_vals.max(0).values
+                        q = torch.quantile(loss_vals, torch.tensor([0.5, 0.9], device=loss_vals.device, dtype=loss_vals.dtype), dim=0)
+                        for i, name in enumerate(proj_part_names):
+                            writer.add_scalar(f"loss_iter/{name}/mean", mean[i].item(), global_iter)
+                            writer.add_scalar(f"loss_iter/{name}/max",  mx[i].item(),   global_iter)
+                            writer.add_scalar(f"loss_iter/{name}/p50",  q[0, i].item(), global_iter)
+                            writer.add_scalar(f"loss_iter/{name}/p90",  q[1, i].item(), global_iter)
+                    extra_logging_loss_vals = []
+            
+            
             ## Add to metrics
             total_enc_align_tensor += alignment(encoded_batch)
             total_enc_unif_tensor += uniformity(encoded_batch)
@@ -413,17 +438,17 @@ def run_training(rank, local_rank, world_size, args):
 
             ## Decide whether to collect LARS stats
             collect_lars_stats = (
-                args.extra_log_rate > 0
-                and global_iter % args.extra_log_rate == 0
+                extra_logging
+                and global_iter % extra_log_rate == 0
                 and rank == 0
             )
             optimizer.collect_stats = collect_lars_stats
 
             ## Update optimizer and scheduler
             optimizer.step()
-            if args.extra_log_rate > 0 and \
+            if extra_logging and \
                global_iter > 0 and \
-               global_iter % args.extra_log_rate == 0 and \
+               global_iter % extra_log_rate == 0 and \
                rank == 0:
                 modules = {"encoder": unwrap(encoder), "proj": unwrap(heads["proj"])}
                 if "clust" in heads: modules["clust"] = unwrap(heads["clust"])
