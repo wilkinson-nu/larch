@@ -137,6 +137,11 @@ FINE_METRICS = {"relative_step_interval_max", "grad_norm_interval_max",
 def view_keys(f):
     return [(f"{view}/" + "/".join(f[k] for k in keys), fine) for view, keys, fine in VIEWS]
 
+BN_QUANTILES = (("min", 0.0), ("p1", 0.01), ("p10", 0.1), ("p50", 0.5),
+                ("p90", 0.9), ("p99", 0.99), ("max", 1.0))
+BN_CATEGORIES = {"norm/gamma": "gamma", "norm/beta": "beta",
+                 "norm/gamma_residual": "gamma_residual"}
+
 @torch.no_grad()
 def log_weight_norms(optimizer, modules, writer, iteration, near_zero_gamma=0.05):
     if writer is None: return
@@ -155,6 +160,7 @@ def log_weight_norms(optimizer, modules, writer, iteration, near_zero_gamma=0.05
     ## Sum over parameters for each group
     sq = defaultdict(float)
     gamma = defaultdict(lambda: [0, 0, 0])  # negative, near zero, total
+    bn_vals = defaultdict(list)   # key -> list of flattened parameter tensors
     for f, (sq_norm, neg, near) in zip(fields, rows):
         for key,_ in view_keys(f):
             sq[key] += sq_norm
@@ -166,6 +172,12 @@ def log_weight_norms(optimizer, modules, writer, iteration, near_zero_gamma=0.05
                 c[1] += near
                 c[2] += f["param"].numel()
 
+        name = BN_CATEGORIES.get(f["category"])
+        if name is not None:
+            v = f["param"].detach().float().flatten()
+            bn_vals[f"bn/{f['layer']}/{name}"].append(v)   # per layer
+            bn_vals[f"bn/{name}"].append(v)                # whole network
+            
     ## Save information
     for key, v in sq.items():
         ## L2 norm of all parameters in this view: sqrt(sum of ||w||^2 over every tensor in it)
@@ -176,6 +188,17 @@ def log_weight_norms(optimizer, modules, writer, iteration, near_zero_gamma=0.05
         ## Fraction of ordinary BN gamma entries with |gamma| < near_zero_gamma (excluding residual gammas)
         ## A rising value means channels are being switched off, which can indicate scale drift
         writer.add_scalar(f"{bn_key}/frac_gamma_near_zero", near / n, iteration)
+
+    if bn_vals:
+        keys = list(bn_vals)
+        q = torch.tensor([p for _, p in BN_QUANTILES])
+        # One quantile vector per key, stacked so there is a single GPU->CPU transfer.
+        out = torch.stack([torch.quantile(torch.cat(bn_vals[k]), q.to(bn_vals[k][0].device))
+                           for k in keys]).cpu().tolist()
+        for k, row in zip(keys, out):
+            for (qname, _), val in zip(BN_QUANTILES, row):
+                # Distribution over channels of this BN parameter type in this layer.
+                writer.add_scalar(f"{k}/{qname}", val, iteration)
         
 @torch.no_grad()
 def log_lars_diagnostics(optimizer, modules, writer, global_iter):
