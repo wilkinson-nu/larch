@@ -160,6 +160,13 @@ class VICRegLossModDistributed(nn.Module):
                 + self.std_coeff * variance_loss
                 + self.cov_coeff * covariance_loss)
 
+        ## Check whether an additional term would be useful
+        z1_std = torch.sqrt(z1_all.var(dim=0, unbiased=False) + self.eps)
+        z1_excess = F.relu(z1_std - 2.0).pow(2).sum()
+        z2_std = torch.sqrt(z2_all.var(dim=0, unbiased=False) + self.eps)
+        z2_excess = F.relu(z2_std - 2.0).pow(2).sum()        
+        excess = z1_excess + z2_excess
+        
         logs = {
             "invariance": invariance_loss.detach(),
             "variance_global": var_global.detach(),
@@ -167,6 +174,7 @@ class VICRegLossModDistributed(nn.Module):
             "variance": variance_loss.detach(),
             "variance_chunked": var_chunk.detach(),
             "variance_gap": (var_chunk - var_global).detach(),
+            "variance_excess": excess.detach(),
         }
 
         ## Track what is happening for each chunk
