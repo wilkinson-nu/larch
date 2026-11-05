@@ -73,6 +73,8 @@ class VICRegLossModDistributed(nn.Module):
         eps=1e-4,
         strat_lambda=0.0,       # 0 = standard VICReg; 1 = fully chunked variance
         strat_chunks=8,         # K: number of occupancy-quantile chunks per global batch
+        eig_coeff=0.0,
+        eig_iters=2
     ):
         super().__init__()
         self.sim_coeff = sim_coeff
@@ -81,6 +83,12 @@ class VICRegLossModDistributed(nn.Module):
         self.eps = eps
         self.strat_lambda = strat_lambda
         self.strat_chunks = strat_chunks
+        self.eig_coeff = eig_coeff
+        self.eig_iters = eig_iters
+
+        # top-eigenvector estimates, one per view, lazily initialised
+        self.v1 = None
+        self.v2 = None
         
     @staticmethod
     def off_diagonal(x):
@@ -97,6 +105,24 @@ class VICRegLossModDistributed(nn.Module):
         xc = x - x.mean(dim=0)
         cov = xc.T @ xc / max(n - 1, 1)
         return self.off_diagonal(cov).pow(2).sum() / d
+
+    def _init_v(self, d, device):
+        g = torch.Generator(device=device).manual_seed(0)   # same on every rank
+        v = torch.randn(d, device=device, generator=g)
+        return v / v.norm()
+
+    def _top_eig(self, x, v):
+        """Returns r = d * lambda_max / trace (1 = isotropic), updated v, and ||v||_4^4."""
+        n, d = x.shape
+        xc = x - x.mean(dim=0)
+        with torch.no_grad():
+            xd = xc.detach()
+            for _ in range(self.eig_iters):
+                v = xd.T @ (xd @ v)
+                v = v / v.norm().clamp_min(1e-12)
+            tr = xd.pow(2).sum() / max(n - 1, 1)          # detached: don't reward inflating all variances
+        lam = (xc @ v).pow(2).sum() / max(n - 1, 1)       # differentiable Rayleigh quotient
+        return d * lam / tr, v, lam, v.pow(4).sum()
 
     def _gather_no_grad(self, x):
         if not (dist.is_available() and dist.is_initialized()): return x
@@ -141,6 +167,18 @@ class VICRegLossModDistributed(nn.Module):
         var_global = self._std_hinge(z1_all) + self._std_hinge(z2_all)
         covariance_loss = self._cov_penalty(z1_all) + self._cov_penalty(z2_all)
 
+        ## Top eigenvalue calculation
+        d = z1_all.shape[1]
+        if self.v1 is None:
+            self.v1 = self._init_v(d, z1_all.device)
+            self.v2 = self.v1.clone()
+        v1_prev = self.v1
+
+        with torch.set_grad_enabled(self.eig_coeff > 0.0):
+            r1, self.v1, lam1, v4_1 = self._top_eig(z1_all, self.v1)
+            r2, self.v2, lam2, v4_2 = self._top_eig(z2_all, self.v2)
+        eig_loss = (r1 - 1).pow(2) + (r2 - 1).pow(2)
+        
         ## Now deal with the stratified sub-batches
         lam = self.strat_lambda
         assert strat_key.shape[0] == batch_size
@@ -156,9 +194,12 @@ class VICRegLossModDistributed(nn.Module):
         else:
             variance_loss = var_global
 
-        loss = (self.sim_coeff * invariance_loss
-                + self.std_coeff * variance_loss
-                + self.cov_coeff * covariance_loss)
+        loss = (
+            self.sim_coeff * invariance_loss
+            + self.std_coeff * variance_loss
+            + self.cov_coeff * covariance_loss
+            + self.eig_coeff * eig_loss
+        )
 
         ## Check whether an additional term would be useful
         z1_std = torch.sqrt(z1_all.var(dim=0, unbiased=False) + self.eps)
@@ -175,6 +216,12 @@ class VICRegLossModDistributed(nn.Module):
             "variance_chunked": var_chunk.detach(),
             "variance_gap": (var_chunk - var_global).detach(),
             "variance_excess": excess.detach(),
+            "eig_r": 0.5 * (r1 + r2).detach(),                     # 1 = isotropic
+            "eig_loss": eig_loss.detach(),
+            "eig_v_cos": torch.dot(self.v1, v1_prev).abs(),        # direction stability between steps
+            "eig_v_l4": 0.5 * (v4_1 + v4_2),                       # ~1/d spread, ~1 axis-aligned
+            "eig_cov_share": ((lam1**2 * (1 - v4_1)) / d).detach() # top direction's contribution to view-1 cov term
+            / self._cov_penalty(z1_all).detach().clamp_min(1e-12),
         }
 
         ## Track what is happening for each chunk
