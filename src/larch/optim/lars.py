@@ -45,7 +45,8 @@ class LARS(torch.optim.Optimizer):
             eps = group["eps"]
             lars_exclude = group.get("lars_exclude", False)
             names = group.get("names")
-
+            use_adam = group.get("adam", False)
+            
             ## Statistics for each parameter group
             group_stats = []
 
@@ -56,37 +57,57 @@ class LARS(torch.optim.Optimizer):
                 ## Get the gradient norm before scaling
                 grad_norm = torch.norm(p.grad)
                 weight_norm = torch.norm(p)
-
-                ## Weight decay, BEFORE getting the update norm
-                update = p.grad
-                if weight_decay != 0.0:
-                    update = update.add(p, alpha=weight_decay)
-                                                            
-                update_norm = torch.norm(update)
-                
-                ## Only apply to LARS scaling to requested layers
+                ## Only applied to LARS scaling to requested layers
                 trust_ratio = torch.ones_like(weight_norm)
-                if not lars_exclude:
-                    
-                    # A trust ratio of one is the fallback for zero-norm
-                    # weights or updates, allowing zero-initialized tensors
-                    # to begin learning.
-                    valid = (weight_norm > 0) & (update_norm > 0)
-                    trust_ratio = torch.where(valid, trust_coef * weight_norm / (update_norm + eps), trust_ratio)
-                    update = update.mul(trust_ratio)
-
-                # Momentum
+                
                 state = self.state[p]
-
-                ## Initialisation info
                 if "init_sq" not in state:
                     state["init_sq"] = p.detach().double().pow(2).sum()
+
+                if use_adam:
+                    b1, b2 = group["betas"]
+                    if "exp_avg" not in state:
+                        state["adam_t"] = 0
+                        state["exp_avg"] = torch.zeros_like(p)
+                        state["exp_avg_sq"] = torch.zeros_like(p)
+                    state["adam_t"] += 1
+                    t = state["adam_t"]
+                    state["exp_avg"].mul_(b1).add_(p.grad, alpha=1 - b1)
+                    state["exp_avg_sq"].mul_(b2).addcmul_(p.grad, p.grad, value=1 - b2)
+                    denom = (state["exp_avg_sq"] / (1 - b2**t)).sqrt_().add_(eps)
+                    buf = (state["exp_avg"] / (1 - b1**t)) / denom
+
+                    ## This is just to use the same logging later
+                    update = buf
+
+                    ## Decoupled (AdamW) weights
+                    if weight_decay != 0.0:
+                        p.mul_(1 - lr * weight_decay)
+
+                else: ## (LARS or SGD)
+
+                    ## Weight decay, BEFORE getting the update norm
+                    update = p.grad
+                    if weight_decay != 0.0:
+                        update = update.add(p, alpha=weight_decay)
+                    update_norm = torch.norm(update)
+
+                    ## Actually LARS
+                    if not lars_exclude:
+                    
+                        # A trust ratio of one is the fallback for zero-norm
+                        # weights or updates, allowing zero-initialized tensors
+                        # to begin learning.
+                        valid = (weight_norm > 0) & (update_norm > 0)
+                        trust_ratio = torch.where(valid, trust_coef * weight_norm / (update_norm + eps), trust_ratio)
+                        update = update.mul(trust_ratio)
                 
-                if "momentum_buffer" not in state:
-                    buf = state["momentum_buffer"] = update.detach().clone()
-                else:
-                    buf = state["momentum_buffer"]
-                    buf.mul_(momentum).add_(update)
+                    if "momentum_buffer" not in state:
+                        buf = state["momentum_buffer"] = update.detach().clone()
+                    else:
+                        buf = state["momentum_buffer"]
+                        buf.mul_(momentum).add_(update)
+
                 buf_norm = torch.norm(buf)
 
                 # Keep track of the maximum values between logging steps
@@ -164,10 +185,12 @@ class LARS_LRScheduler:
 
     def _set_lr(self, lr):
         for group in self.optimizer.param_groups:
-            if group.get('lars_exclude', False):
-                group['lr'] = lr * group.get('lr_scale', 1.0)
+            if group.get("adam", False):
+                group["lr"] = group["adam_lr"] * lr / self.lr_max
+            elif group.get("lars_exclude", False):
+                group["lr"] = lr * group.get("lr_scale", 1.0)
             else:
-                group['lr'] = lr
+                group["lr"] = lr
 
     def step(self):
         self.step_count += 1

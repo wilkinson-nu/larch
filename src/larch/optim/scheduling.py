@@ -27,11 +27,13 @@ def get_opt_and_sched(args, encoder, heads, total_steps, world_size, print_debug
                                       bool(args.weight_decay_head),
                                       args.non_lars_lr_scale,
                                       args.non_lars_weight_decay,
-                                      print_debug)
+                                      omit_adam_lr=getattr(args, "omit_adam_lr", None),
+                                      print_debug=print_debug)
     
     ## Sort out the optimizer (one for each GPU...)
     if args.optimizer == 'lars':
-        if print_debug: print0(f"Optimizer = LARS; LR = {args.lr} ({args.lr*(args.batch_size*world_size/256)}); trust = {args.lars_trust_coeff}; mom = {args.lars_momentum}")
+        if print_debug:
+            print0(f"Optimizer = LARS; LR = {args.lr} ({args.lr*(args.batch_size*world_size/256)}); trust = {args.lars_trust_coeff}; mom = {args.lars_momentum}")
         corr_lr = args.lr * (args.batch_size*world_size / 256)
         optimizer = LARS(
             param_groups,
@@ -71,6 +73,8 @@ def build_param_groups(encoder,
                        weight_decay_head=False,
                        non_lars_lr_scale=1.0,
                        non_lars_weight_decay=0.0,
+                       omit_adam_lr=None,
+                       omit_betas=(0.9, 0.95),
                        print_debug=False):
     """
     This works for both Adam and LARS.
@@ -121,8 +125,11 @@ def build_param_groups(encoder,
 
         print0(f"OMITTED ({len(omit_params)} parameters):")
         for name, param in zip(omit_names, omit_params):
-            print0(f"  NO LARS / NO WD:  {name:60s} {tuple(param.shape)}")
-
+            if omit_adam_lr is not None:
+                print0(f"  AdamW / NO WD:  {name:60s} {tuple(param.shape)}")
+            else:
+                print0(f"    SGD / NO WD:  {name:60s} {tuple(param.shape)}")
+                
         print0(f"HEAD ({len(head_params)} parameters):")
         for name, param in zip(head_names, head_params):
             print0(
@@ -144,6 +151,9 @@ def build_param_groups(encoder,
             "group_name": "omit",
             "params": omit_params,
             "names": omit_names,
+            "adam": omit_adam_lr is not None,
+            "adam_lr": omit_adam_lr,
+            "adam_betas": omit_betas,
             "weight_decay": non_lars_weight_decay,
             "weight_sched": False,
             "lars_exclude": True,

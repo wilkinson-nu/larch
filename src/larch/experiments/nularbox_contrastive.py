@@ -717,6 +717,7 @@ def build_parser():
     parser.add_argument('--norm_encoder', type=int, choices=[0,1])
     parser.add_argument('--non_lars_lr_scale', type=float)
     parser.add_argument('--non_lars_weight_decay', type=float)
+    parser.add_argument('--omit_adam_lr', type=float)
     
     ## Image size and augmentations
     parser.add_argument('--out_image_size', type=int)
