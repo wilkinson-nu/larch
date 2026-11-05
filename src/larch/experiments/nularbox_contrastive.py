@@ -265,7 +265,7 @@ def run_training(rank, local_rank, world_size, args):
 
     ## Setup additional logging
     extra_log_rate = args.extra_log_rate
-    extra_logging = bool(log_every > 0)
+    extra_logging = bool(extra_log_rate > 0)
     extra_logging_loss_vals = []
         
     ## Loop over the desired epochs
