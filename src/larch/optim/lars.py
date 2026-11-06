@@ -65,7 +65,7 @@ class LARS(torch.optim.Optimizer):
                     state["init_sq"] = p.detach().double().pow(2).sum()
 
                 if use_adam:
-                    b1, b2 = group["betas"]
+                    b1, b2 = group["adam_betas"]
                     if "exp_avg" not in state:
                         state["adam_t"] = 0
                         state["exp_avg"] = torch.zeros_like(p)

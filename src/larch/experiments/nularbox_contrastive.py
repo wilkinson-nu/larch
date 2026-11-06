@@ -109,7 +109,8 @@ def run_training(rank, local_rank, world_size, args):
         print0(f"LOSS: VICReg")
         print0(f"      sim_coeff = {args.vicreg_sim_coeff}")
         print0(f"      std_coeff = {args.vicreg_std_coeff}")
-        print0(f"      cov_coeff = {args.vicreg_cov_coeff}")        
+        print0(f"      cov_coeff = {args.vicreg_cov_coeff}")
+        
         loss_fns["proj"] = VICRegLossDistributed(args.vicreg_sim_coeff,
                                                  args.vicreg_std_coeff,
                                                  args.vicreg_cov_coeff)
@@ -118,6 +119,7 @@ def run_training(rank, local_rank, world_size, args):
         print0(f"      sim_coeff = {args.vicreg_sim_coeff}")
         print0(f"      std_coeff = {args.vicreg_std_coeff}")
         print0(f"      cov_coeff = {args.vicreg_cov_coeff}")
+        print0(f"      eig_coeff = {args.vicreg_eig_coeff}")
         print0(f"   strat_lambda = {args.vicreg_strat_lambda}")
         print0(f"cov_strat_random = {args.cov_strat_random}")
         print0(f"cov_strat_lambda = {args.cov_strat_lambda}")        
@@ -132,7 +134,8 @@ def run_training(rank, local_rank, world_size, args):
                                                     args.vicreg_cov_coeff,
                                                     strat_lambda=args.vicreg_strat_lambda,
                                                     strat_chunks=strat_nchunks,
-                                                    cov_strat_lambda=args.cov_strat_lambda)
+                                                    cov_strat_lambda=args.cov_strat_lambda,
+                                                    eig_coeff=args.vicreg_eig_coeff)
     else:
         raise ValueError(f"Unknown projection head loss: {args.proj_loss}")
 
@@ -772,6 +775,7 @@ def build_parser():
     parser.add_argument('--vicreg_sim_coeff', type=float)
     parser.add_argument('--vicreg_std_coeff', type=float)
     parser.add_argument('--vicreg_cov_coeff', type=float)
+    parser.add_argument('--vicreg_eig_coeff', type=float)
     parser.add_argument('--vicreg_strat_lambda', type=float)    
     parser.add_argument('--vicreg_strat_nchunks', type=int)
     parser.add_argument('--cov_strat_lambda', type=float)
