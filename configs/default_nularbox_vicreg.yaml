@@ -21,7 +21,7 @@ weight_decay_head: 1
 norm_encoder: 0
 non_lars_lr_scale: 0.03
 non_lars_weight_decay: 0.0
-omit_adam_lr: "none"
+omit_adam_lr: null
 
 ## ---- image size and augmentations ----
 out_image_size: 256
@@ -68,6 +68,7 @@ proj_act: leakyrelu
 vicreg_sim_coeff: 25.0
 vicreg_std_coeff: 25.0
 vicreg_cov_coeff: 1.0
+vicreg_eig_coeff: 0
 vicreg_strat_lambda: 0.0
 vicreg_strat_nchunks: -1
 
