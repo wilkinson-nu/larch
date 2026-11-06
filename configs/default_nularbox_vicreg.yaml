@@ -71,6 +71,8 @@ vicreg_cov_coeff: 1.0
 vicreg_eig_coeff: 0
 vicreg_strat_lambda: 0.0
 vicreg_strat_nchunks: -1
+cov_strat_lambda: 0.0
+cov_strat_random: -1
 
 ## ---- kNN and linear probe monitoring ----
 monitor_nbank: 100000
