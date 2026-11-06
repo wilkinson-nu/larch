@@ -119,6 +119,8 @@ def run_training(rank, local_rank, world_size, args):
         print0(f"      std_coeff = {args.vicreg_std_coeff}")
         print0(f"      cov_coeff = {args.vicreg_cov_coeff}")
         print0(f"   strat_lambda = {args.vicreg_strat_lambda}")
+        print0(f"cov_strat_random = {args.cov_strat_random}")
+        print0(f"cov_strat_lambda = {args.cov_strat_lambda}")        
         print0(f"  strat_nchunks = {args.vicreg_strat_nchunks}")
 
         ## Get the number of chunks, default to a sensible baseline
@@ -129,7 +131,8 @@ def run_training(rank, local_rank, world_size, args):
                                                     args.vicreg_std_coeff,
                                                     args.vicreg_cov_coeff,
                                                     strat_lambda=args.vicreg_strat_lambda,
-                                                    strat_chunks=strat_nchunks)
+                                                    strat_chunks=strat_nchunks,
+                                                    cov_strat_lambda=args.cov_strat_lambda)
     else:
         raise ValueError(f"Unknown projection head loss: {args.proj_loss}")
 
@@ -369,7 +372,10 @@ def run_training(rank, local_rank, world_size, args):
             ## Deal with the projection loss
             proj_batch = heads["proj"](encoded_batch)
             strat_key = torch.log10(batch_labels["nhits"].clamp_min(1e-6))
-            proj_loss, proj_loss_parts = loss_fns["proj"](proj_batch, strat_key)
+
+            ## TEMPORARY testing (famous last words)
+            cov_key = torch.rand_like(strat_key) if args.cov_strat_random > 0 else None
+            proj_loss, proj_loss_parts = loss_fns["proj"](proj_batch, strat_key, cov_key)
 
             tot_loss = proj_loss
             losses_tensor["proj"] += proj_loss.detach()
@@ -768,6 +774,8 @@ def build_parser():
     parser.add_argument('--vicreg_cov_coeff', type=float)
     parser.add_argument('--vicreg_strat_lambda', type=float)    
     parser.add_argument('--vicreg_strat_nchunks', type=int)
+    parser.add_argument('--cov_strat_lambda', type=float)
+    parser.add_argument('--cov_strat_random', type=int
     
     ## kNN and linear probe monitoring options
     parser.add_argument('--monitor_nbank', type=int)
