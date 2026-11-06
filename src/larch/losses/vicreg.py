@@ -72,6 +72,7 @@ class VICRegLossModDistributed(nn.Module):
         cov_coeff=1.0,
         eps=1e-4,
         strat_lambda=0.0,       # 0 = standard VICReg; 1 = fully chunked variance
+        strat_cov_lambda=0.0,
         strat_chunks=8,         # K: number of occupancy-quantile chunks per global batch
         eig_coeff=0.0,
         eig_iters=2
@@ -82,6 +83,7 @@ class VICRegLossModDistributed(nn.Module):
         self.cov_coeff = cov_coeff
         self.eps = eps
         self.strat_lambda = strat_lambda
+        self.strat_cov_lambda = strat_cov_lambda
         self.strat_chunks = strat_chunks
         self.eig_coeff = eig_coeff
         self.eig_iters = eig_iters
@@ -129,27 +131,46 @@ class VICRegLossModDistributed(nn.Module):
         out = [torch.empty_like(x) for _ in range(dist.get_world_size())]
         dist.all_gather(out, x.contiguous())
         return torch.cat(out, dim=0)
-    
-    def _chunked_terms(self, z1_all, z2_all, key_all):
-        ## Stable sort on gathered inputs keeps things consistent between ranks
+
+    def _chunk_idx(self, key_all):
         order = torch.argsort(key_all, stable=True)
+        return torch.tensor_split(order, self.strat_chunks)
 
-        ## Loop over chunks, and calculate the variance term for each chunk
+    def _chunked_var(self, z1_all, z2_all, key_all):
         var_per_chunk, key_std = [], []
-
-        chunks = torch.tensor_split(order, self.strat_chunks)
-        for idx in chunks:
-            a, b = z1_all[idx], z2_all[idx]
-            var_per_chunk.append(self._std_hinge(a) + self._std_hinge(b))
+        for idx in self._chunk_idx(key_all):
+            var_per_chunk.append(self._std_hinge(z1_all[idx]) + self._std_hinge(z2_all[idx]))
             key_std.append(key_all[idx].std(unbiased=False))
-
         var_per_chunk = torch.stack(var_per_chunk)
-        var_chunk = var_per_chunk.mean()
+        return var_per_chunk.mean(), var_per_chunk, torch.stack(key_std)
 
-        return var_chunk, var_per_chunk, torch.stack(key_std)
+    def _chunked_cov(self, z1_all, z2_all, key_all):
+        cov_per_chunk = torch.stack([
+            self._cov_penalty(z1_all[idx]) + self._cov_penalty(z2_all[idx])
+            for idx in self._chunk_idx(key_all)
+        ])
+        return cov_per_chunk.mean(), cov_per_chunk
+    
+    ## def _chunked_terms(self, z1_all, z2_all, key_all):
+    ##     ## Stable sort on gathered inputs keeps things consistent between ranks
+    ##     order = torch.argsort(key_all, stable=True)
+    ## 
+    ##     ## Loop over chunks, and calculate the variance term for each chunk
+    ##     var_per_chunk, key_std = [], []
+    ## 
+    ##     chunks = torch.tensor_split(order, self.strat_chunks)
+    ##     for idx in chunks:
+    ##         a, b = z1_all[idx], z2_all[idx]
+    ##         var_per_chunk.append(self._std_hinge(a) + self._std_hinge(b))
+    ##         key_std.append(key_all[idx].std(unbiased=False))
+    ## 
+    ##     var_per_chunk = torch.stack(var_per_chunk)
+    ##     var_chunk = var_per_chunk.mean()
+    ## 
+    ##     return var_chunk, var_per_chunk, torch.stack(key_std)
 
     ## This now requires a key to be given for stratifying the number of events into sub-batches
-    def forward(self, emb_cat, strat_key):
+    def forward(self, emb_cat, strat_key, cov_key=None):
         assert emb_cat.shape[0] % 2 == 0
 
         batch_size = emb_cat.shape[0] // 2
@@ -165,7 +186,7 @@ class VICRegLossModDistributed(nn.Module):
         z2_all = torch.cat(GatherLayer.apply(z2), dim=0)
 
         var_global = self._std_hinge(z1_all) + self._std_hinge(z2_all)
-        covariance_loss = self._cov_penalty(z1_all) + self._cov_penalty(z2_all)
+        cov_global = self._cov_penalty(z1_all) + self._cov_penalty(z2_all)
 
         ## Top eigenvalue calculation
         d = z1_all.shape[1]
@@ -183,17 +204,21 @@ class VICRegLossModDistributed(nn.Module):
         lam = self.strat_lambda
         assert strat_key.shape[0] == batch_size
         key_all = self._gather_no_grad(strat_key.detach().float().to(emb_cat.device))
-
+        cov_key_all = key_all if cov_key is None else \
+            self._gather_no_grad(cov_key.detach().float().to(emb_cat.device))
+        
         ## Calculate the chunked variance
         with torch.set_grad_enabled(lam > 0.0):
-            var_chunk, var_per_chunk, key_std = self._chunked_terms(z1_all, z2_all, key_all)
+            var_chunk, var_per_chunk, key_std = self._chunked_var(z1_all, z2_all, key_all)
 
         ## Add to the variance loss
-        if lam > 0.0:
-            variance_loss = (1.0 - lam) * var_global + lam * var_chunk
-        else:
-            variance_loss = var_global
+        variance_loss = (1.0 - lam) * var_global + lam * var_chunk if lam > 0.0 else var_global
 
+        clam = self.cov_strat_lambda
+        with torch.set_grad_enabled(clam > 0.0):
+            cov_chunk, cov_per_chunk = self._chunked_cov(z1_all, z2_all, cov_key_all)
+        covariance_loss = (1.0 - clam) * cov_global + clam * cov_chunk if clam > 0.0 else cov_global
+        
         loss = (
             self.sim_coeff * invariance_loss
             + self.std_coeff * variance_loss
@@ -211,11 +236,14 @@ class VICRegLossModDistributed(nn.Module):
         logs = {
             "invariance": invariance_loss.detach(),
             "variance_global": var_global.detach(),
-            "covariance": covariance_loss.detach(),
             "variance": variance_loss.detach(),
             "variance_chunked": var_chunk.detach(),
             "variance_gap": (var_chunk - var_global).detach(),
             "variance_excess": excess.detach(),
+            "covariance_global": cov_global.detach(),
+            "covariance": covariance_loss.detach(),
+            "covariance_chunked": cov_chunk.detach(),
+            "covariance_gap": (cov_chunk - cov_global).detach(),
             "eig_r": 0.5 * (r1 + r2).detach(),                     # 1 = isotropic
             "eig_loss": eig_loss.detach(),
             "eig_v_cos": torch.dot(self.v1, v1_prev).abs(),        # direction stability between steps
