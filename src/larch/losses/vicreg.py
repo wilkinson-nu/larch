@@ -72,7 +72,7 @@ class VICRegLossModDistributed(nn.Module):
         cov_coeff=1.0,
         eps=1e-4,
         strat_lambda=0.0,       # 0 = standard VICReg; 1 = fully chunked variance
-        strat_cov_lambda=0.0,
+        cov_strat_lambda=0.0,
         strat_chunks=8,         # K: number of occupancy-quantile chunks per global batch
         eig_coeff=0.0,
         eig_iters=2
@@ -83,7 +83,7 @@ class VICRegLossModDistributed(nn.Module):
         self.cov_coeff = cov_coeff
         self.eps = eps
         self.strat_lambda = strat_lambda
-        self.strat_cov_lambda = strat_cov_lambda
+        self.cov_strat_lambda = cov_strat_lambda
         self.strat_chunks = strat_chunks
         self.eig_coeff = eig_coeff
         self.eig_iters = eig_iters

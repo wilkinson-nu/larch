@@ -779,7 +779,7 @@ def build_parser():
     parser.add_argument('--vicreg_strat_lambda', type=float)    
     parser.add_argument('--vicreg_strat_nchunks', type=int)
     parser.add_argument('--cov_strat_lambda', type=float)
-    parser.add_argument('--cov_strat_random', type=int
+    parser.add_argument('--cov_strat_random', type=int)
     
     ## kNN and linear probe monitoring options
     parser.add_argument('--monitor_nbank', type=int)
