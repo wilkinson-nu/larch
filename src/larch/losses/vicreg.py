@@ -87,7 +87,8 @@ class VICRegLossModDistributed(nn.Module):
         self.strat_chunks = strat_chunks
         self.eig_coeff = eig_coeff
         self.eig_iters = eig_iters
-
+        self.eig_cap = 5
+        
         # top-eigenvector estimates, one per view, lazily initialised
         self.v1 = None
         self.v2 = None
@@ -126,6 +127,13 @@ class VICRegLossModDistributed(nn.Module):
         lam = (xc @ v).pow(2).sum() / max(n - 1, 1)       # differentiable Rayleigh quotient
         return d * lam / tr, v, lam, v.pow(4).sum()
 
+    def _spectral_hinge(self, x):
+        n = x.shape[0]
+        xc = x - x.mean(dim=0)
+        cov = xc.T @ xc / max(n - 1, 1)
+        ev = torch.linalg.eigvalsh(cov.double()).float()
+        return F.relu(ev - self.eig_cap).pow(2).sum(), ev.detach()
+    
     def _gather_no_grad(self, x):
         if not (dist.is_available() and dist.is_initialized()): return x
         out = [torch.empty_like(x) for _ in range(dist.get_world_size())]
@@ -151,23 +159,6 @@ class VICRegLossModDistributed(nn.Module):
         ])
         return cov_per_chunk.mean(), cov_per_chunk
     
-    ## def _chunked_terms(self, z1_all, z2_all, key_all):
-    ##     ## Stable sort on gathered inputs keeps things consistent between ranks
-    ##     order = torch.argsort(key_all, stable=True)
-    ## 
-    ##     ## Loop over chunks, and calculate the variance term for each chunk
-    ##     var_per_chunk, key_std = [], []
-    ## 
-    ##     chunks = torch.tensor_split(order, self.strat_chunks)
-    ##     for idx in chunks:
-    ##         a, b = z1_all[idx], z2_all[idx]
-    ##         var_per_chunk.append(self._std_hinge(a) + self._std_hinge(b))
-    ##         key_std.append(key_all[idx].std(unbiased=False))
-    ## 
-    ##     var_per_chunk = torch.stack(var_per_chunk)
-    ##     var_chunk = var_per_chunk.mean()
-    ## 
-    ##     return var_chunk, var_per_chunk, torch.stack(key_std)
 
     ## This now requires a key to be given for stratifying the number of events into sub-batches
     def forward(self, emb_cat, strat_key, cov_key=None):
@@ -198,7 +189,12 @@ class VICRegLossModDistributed(nn.Module):
         with torch.set_grad_enabled(self.eig_coeff > 0.0):
             r1, self.v1, lam1, v4_1 = self._top_eig(z1_all, self.v1)
             r2, self.v2, lam2, v4_2 = self._top_eig(z2_all, self.v2)
-        eig_loss = (r1 - 1).pow(2) + (r2 - 1).pow(2)
+        ## eig_loss = (r1 - 1).pow(2) + (r2 - 1).pow(2)
+
+        with torch.set_grad_enabled(self.eig_coeff > 0.0):
+            s1, ev1 = self._spectral_hinge(z1_all)
+            s2, ev2 = self._spectral_hinge(z2_all)
+        eig_loss = s1 + s2
         
         ## Now deal with the stratified sub-batches
         lam = self.strat_lambda
@@ -244,6 +240,8 @@ class VICRegLossModDistributed(nn.Module):
             "covariance": covariance_loss.detach(),
             "covariance_chunked": cov_chunk.detach(),
             "covariance_gap": (cov_chunk - cov_global).detach(),
+            "eig_top1": ev1[-1], "eig_top2": ev1[-2], "eig_top5": ev1[-5],
+            "eig_n_above_cap": (ev1 > self.eig_cap).sum().float(),
             "eig_r": 0.5 * (r1 + r2).detach(),                     # 1 = isotropic
             "eig_loss": eig_loss.detach(),
             "eig_v_cos": torch.dot(self.v1, v1_prev).abs(),        # direction stability between steps
