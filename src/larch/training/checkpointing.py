@@ -22,22 +22,14 @@ def load_checkpoint(encoder, heads, optimizer, scheduler, state_file_name):
     torch.set_rng_state(checkpoint['rng_state'].cpu())
     torch.cuda.set_rng_state_all(checkpoint['cuda_rng_state'])
 
-    ## If we have a scheduler, load it
-    if 'scheduler_state_dict' in checkpoint and scheduler is not None:
+    if scheduler is not None:
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
     
-    ## Load heads as requested
     for	name, head in heads.items():
-        key = f'{name}_head_state_dict'
-        if key in checkpoint:
-            unwrap(head).load_state_dict(checkpoint[key])
+        unwrap(head).load_state_dict(f'{name}_head_state_dict')
 
-    ## Load metrics
     metrics = defaultdict(list, checkpoint.get("metrics", {}))
-    
-    start_epoch = checkpoint['epoch'] + 1
-
-    return start_epoch, metrics
+    return checkpoint['epoch'] + 1, metrics
 
 def save_checkpoint(encoder, heads, optimizer, scheduler, state_file_name, iteration, metrics, args):
 
