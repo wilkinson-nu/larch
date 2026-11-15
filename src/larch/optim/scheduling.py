@@ -44,14 +44,14 @@ def get_opt_and_sched(args, encoder, heads, total_steps, world_size, print_debug
 
         warmup_steps = min(1000, int(0.05 * total_steps))
 
-    if scheduler == "cosine":
+    if args.scheduler == "cosine":
         scheduler = LARS_CosineScheduler(optimizer,
                                          warmup_steps,
                                          total_steps,
                                          lr_max=corr_lr,
                                          lr_min=corr_lr*args.final_lr_frac)
     elif args.scheduler == "wsd":
-        steps_per_epoch = total_steps // args.epochs
+        steps_per_epoch = total_steps // args.nepoch
         scheduler = LARS_WSDScheduler(optimizer,
                                       lr_max=corr_lr,
                                       warmup_steps=args.warmup_epochs*steps_per_epoch,
