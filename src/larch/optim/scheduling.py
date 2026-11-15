@@ -1,7 +1,7 @@
 import torch
 import math
 from torch import optim
-from larch.optim.lars import LARS, LARS_LRScheduler
+from larch.optim.lars import LARS, LARS_CosineScheduler, LARS_WSDScheduler
 from larch.distributed import print0
 
 def build_onecycle(optimizer, max_lr, total_steps):
@@ -43,7 +43,22 @@ def get_opt_and_sched(args, encoder, heads, total_steps, world_size, print_debug
         )
 
         warmup_steps = min(1000, int(0.05 * total_steps))
-        scheduler = LARS_LRScheduler(optimizer, warmup_steps, total_steps, lr_max=corr_lr, lr_min=corr_lr*1e-3)
+
+    if scheduler == "cosine":
+        scheduler = LARS_CosineScheduler(optimizer,
+                                         warmup_steps,
+                                         total_steps,
+                                         lr_max=corr_lr,
+                                         lr_min=corr_lr*args.final_lr_frac)
+    elif args.scheduler == "wsd":
+        steps_per_epoch = total_steps // args.epochs
+        scheduler = LARS_WSDScheduler(optimizer,
+                                      lr_max=corr_lr,
+                                      warmup_steps=args.warmup_epochs*steps_per_epoch,
+                                      total_steps=total_steps,
+                                      decay_start=args.decay_start_epoch*steps_per_epoch,
+                                      lr_min=corr_lr * args.final_lr_frac,
+                                      shape=args.decay_shape)
 
     ## Default to adam
     else:
