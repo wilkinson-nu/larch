@@ -239,20 +239,19 @@ def run_training(rank, local_rank, world_size, args):
     
     ## Set up metrics
     metrics = defaultdict(list)
-
-    ## Load the checkpoint if one has been given
     start_epoch = 0
     global_iter = 0
-    if args.restart:
-        start_epoch, metrics = load_checkpoint(encoder, heads, optimizer, scheduler, state_file)
-        global_iter = start_epoch*nbatches
-        print0("Restarting from epoch", start_epoch)
+    
+    ## Load models/resume if needed
+    if args.resume_from and args.pretrained:
+        raise ValueError("--resume_from and --pretrained are mutually exclusive")
 
-    ## Load the pretrained model if given
+    if args.resume_from:
+        start_epoch, metrics = load_checkpoint(encoder, heads, optimizer, scheduler, args.resume_from)
+        global_iter = start_epoch * nbatches
+        print0(f"Restarting from epoch {start_epoch} (step {global_iter})")
+
     if args.pretrained:
-        if args.restart:
-            print0("Restart requested along with a pretraining file, abort!")
-            sys.exit()
         load_pretrained(encoder, heads, args.pretrained)
 
     ## Stuff in a profiler
@@ -636,10 +635,14 @@ def run_training(rank, local_rank, world_size, args):
         ## For checkpointing
         if rank==0 and epoch%args.checkpoint_every == 0 and epoch != 0 and args.checkpoint_every > 0:
             ckpt_file = state_file.with_name(f"{state_file.name}.check{epoch:03d}")
-            ## For now, don't save the optimizer state to keep things small
             save_checkpoint(encoder, heads, optimizer, scheduler, ckpt_file, epoch, metrics, args)
-            # save_checkpoint(encoder, heads, None, None, ckpt_file, epoch, metrics, args)
-            
+
+        ## If we're using WSD, save the last stable epoch for ease of use later
+        if rank==0 and args.scheduler == "wsd" and \
+           args.decay_start_epoch is not None and \
+           epoch == args.decay_start_epoch-1:
+            ckpt_file = state_file.with_name(f"{state_file.name}.final_stable{epoch}")
+            save_checkpoint(encoder, heads, optimizer, scheduler, ckpt_file, epoch, metrics, args)
 
         ## Add per GPU logging
         allocated_gb = torch.tensor(torch.cuda.memory_allocated() / 1e9, device=device)
@@ -709,14 +712,20 @@ def build_parser():
     parser.add_argument('--num_workers', type=int)
     parser.add_argument('--log', type=str)
     parser.add_argument('--state_file', type=str)
-    parser.add_argument('--restart', action='store_true')
+    parser.add_argument('--resume_from', type=str, default=None)
     parser.add_argument('--pretrained', type=str, default=None)
+
+    ## Scheduling and checkpointing
+    parser.add_argument('--scheduler', type=str)
+    parser.add_argument("--warmup_epochs", type=int)
+    parser.add_argument("--decay_start_epoch", type=int)
+    parser.add_argument("--decay_shape", type=str)
+    parser.add_argument("--final_lr_frac", type=float)
     
     ## Training dynamics
     parser.add_argument('--lr', type=float)
     parser.add_argument('--batch_size', type=int)
     parser.add_argument('--optimizer', type=str)
-    parser.add_argument('--scheduler', type=str)
     parser.add_argument('--lars_trust_coeff', type=float)
     parser.add_argument('--lars_momentum', type=float)
     parser.add_argument('--dropout', type=float)
