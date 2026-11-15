@@ -4,8 +4,16 @@
 num_workers: 8
 seed: 12345
 pretrained: null
+resume_from: null
 state_file: state.pth
 log: log
+
+## ---- Scheduling ----
+scheduler: wsd
+warmup_epochs: 4
+decay_start_epoch: null
+decay_shape: linear
+final_lr_frac:1.0e-3
 
 ## ---- training dynamics ----
 lr: 0.1
