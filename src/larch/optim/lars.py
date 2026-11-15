@@ -210,7 +210,7 @@ class LARS_WSDScheduler:
             return self.lr_max
 
         ## Decay
-        t = min(1.0, (step - self.decay_start) / max(1, self.decay_steps))
+        t = min(1.0, (step - self.decay_start)/ (self.total_steps - self.decay_start))
         if self.shape == "cosine":
             f = 0.5 * (1.0 + cos(pi * t))
         elif self.shape == "linear":
