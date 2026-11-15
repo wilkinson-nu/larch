@@ -74,15 +74,6 @@ def run_training(rank, local_rank, world_size, args):
     ## Setup the encoder
     encoder = get_encoder(args)
     encoder = ME.MinkowskiSyncBatchNorm.convert_sync_batchnorm(encoder)
-
-    if args.freeze_gamma:
-        residual = {id(p) for p in encoder.residual_gammas()}
-        for m in encoder.modules():
-            bn = getattr(m, "bn", m)
-            if isinstance(bn, nn.modules.batchnorm._BatchNorm) and bn.affine:
-                if id(bn.weight) not in residual:
-                    bn.weight.requires_grad_(False)   # stays at its init value of 1
-    
     encoder_nchan = encoder.get_nchan()
     encoder .to(device)
     encoder = DDP(encoder, device_ids=[local_rank])  ## Sort out parallel models (e.g., one is sent to each GPU)
@@ -757,9 +748,6 @@ def build_parser():
     parser.add_argument('--enc_final_linear', type=int)
     parser.add_argument('--enc_stem_channels', type=int)
 
-    ## TEMP
-    parser.add_argument('--freeze_gamma', type=int)
-    
     ## (Optional) clustering head
     parser.add_argument('--clust_arch', type=str)
     parser.add_argument('--clust_temp', type=float)
