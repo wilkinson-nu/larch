@@ -222,12 +222,9 @@ class ResNetBase(nn.Module):
         return nn.Sequential(*layers)
 
     def pooled_to_dense(self, pooled, batch_size):
-        idx = pooled.C[:, 0].long()
-        h = pooled.F.new_zeros(batch_size, pooled.F.shape[1])
-        h[idx] = pooled.F
-        valid = torch.zeros(batch_size, dtype=torch.bool, device=h.device)
-        valid[idx] = True
-        return h, valid
+        if pooled.F.shape[0] < batch_size:
+            raise RuntimeError(f"Batch size mismatch in the encoder {pooled.F.shape[0]} < {batch_size}")
+        return pooled.F
     
     def forward(self, x, batch_size):
 
@@ -242,17 +239,16 @@ class ResNetBase(nn.Module):
 
         ## Deal with optional concatenation of pooling options
         if self.pool == "both":
-            h_avg, v_avg = self.pooled_to_dense(self.global_pool_avg(x), batch_size)
-            h_max, v_max = self.pooled_to_dense(self.global_pool_max(x), batch_size)
-            h, valid = torch.cat([h_avg, h_max], dim=-1), v_avg & v_max
+            h_avg = self.pooled_to_dense(self.global_pool_avg(x), batch_size)
+            h_max = self.pooled_to_dense(self.global_pool_max(x), batch_size)
+            h = torch.cat([h_avg, h_max], dim=-1)
         else:
-            h, valid = self.pooled_to_dense(self.global_pool(x), batch_size)
+            h = self.pooled_to_dense(self.global_pool(h), batch_size)
             
         ## Add the bottleneck if requested
         if self.bottleneck is not None:
-            z = self.bottleneck(h[valid])
-            h = z.new_zeros(batch_size, z.shape[1]).index_copy(0, valid.nonzero().squeeze(1), z)
-        return h, valid
+            h = self.bottleneck(h)
+        return h
 
     def get_pool_nchan(self):
         base = self.BLOCK.expansion * self.PLANES[-1]
