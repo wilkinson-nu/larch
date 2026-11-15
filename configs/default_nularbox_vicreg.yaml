@@ -13,7 +13,7 @@ scheduler: wsd
 warmup_epochs: 4
 decay_start_epoch: null
 decay_shape: linear
-final_lr_frac:1.0e-3
+final_lr_frac: 1.0e-3
 
 ## ---- training dynamics ----
 lr: 0.1
