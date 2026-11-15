@@ -1,5 +1,5 @@
 import torch
-from math import cos, pi
+from math import cos, pi, sqrt, isclose
 
 class LARS(torch.optim.Optimizer):
     def __init__(
@@ -153,16 +153,122 @@ class LARS(torch.optim.Optimizer):
                     })
                     
             self.last_stats[group_idx] = group_stats
-            
 
-class LARS_LRScheduler:
+            
+class LARS_WSDScheduler:
+    """Linear warmup -> constant lr_max -> optional decay to lr_min at the end.
+
+    decay_start=None: constant LR after warmup, for as long as training runs.
+    decay_start=S:    LR decays from step S to lr_min at total_steps.
+
+    Only stable-phase checkpoints can be resumed. Branch a cooldown by
+    resuming a stable checkpoint with decay_start set to its step count.
+
+    Convention: call scheduler.step() AFTER optimizer.step().
+    lr_max is the ALREADY-SCALED peak LR.
+    """
+
+    ## Options for how to decay the LR
+    SHAPES = ("cosine", "linear", "1-sqrt")
+
+    def __init__(
+            self, optimizer,
+            warmup_steps,
+            lr_max,
+            lr_min=0.0,
+            decay_start=None,
+            shape="linear",
+            total_steps=None
+    ):
+        if shape not in self.SHAPES:
+            raise ValueError(f"unknown decay shape {shape!r}; expected one of {self.SHAPES}")
+        if not 0 <= warmup_steps < total_steps:
+            raise ValueError(f"need 0 <= warmup_steps ({warmup_steps}) < total_steps ({total_steps})")
+        if decay_start is not None and not warmup_steps <= decay_start < total_steps:
+            raise ValueError(f"need warmup_steps ({warmup_steps}) <= decay_start "
+                             f"({decay_start}) < total_steps ({total_steps})")
+
+        self.optimizer = optimizer
+        self.lr_max = lr_max
+        self.lr_min = lr_min
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
+        self.decay_start = decay_start
+        self.shape = shape
+        self.step_count = 0
+        self._set_lr(self._lr_at(0))
+
+
+    def _lr_at(self, step):
+
+        ## Warmup
+        if step < self.warmup_steps:
+            return self.lr_max * (step + 1) / self.warmup_steps
+
+        ## Stable
+        if self.decay_start is None or step < self.decay_start:
+            return self.lr_max
+
+        ## Decay
+        t = min(1.0, (step - self.decay_start) / max(1, self.decay_steps))
+        if self.shape == "cosine":
+            f = 0.5 * (1.0 + cos(pi * t))
+        elif self.shape == "linear":
+            f = 1.0 - t
+        else:  # "1-sqrt"
+            f = 1.0 - sqrt(t)
+        return self.lr_min + (self.lr_max - self.lr_min) * f
+
+    ## Interactions with the optimizer
+    def _set_lr(self, lr):
+        for group in self.optimizer.param_groups:
+            if group.get("adam", False):
+                group["lr"] = group["adam_lr"] * lr / self.lr_max
+            elif group.get("lars_exclude", False):
+                group["lr"] = lr * group.get("lr_scale", 1.0)
+            else:
+                group["lr"] = lr
+
+    def step(self):
+        self.step_count += 1
+        self._set_lr(self._lr_at(self.step_count))
+
+    def get_last_lr(self):
+        return [g["lr"] for g in self.optimizer.param_groups]
+
+    ## Information for checkpointing
+    def state_dict(self):
+        return {
+            "step_count": self.step_count,
+            "warmup_steps": self.warmup_steps,
+            "lr_max": self.lr_max,
+            "decay_start": self.decay_start,
+        }
+
+    def load_state_dict(self, sd):
+        step = sd["step_count"]
+        if sd["decay_start"] is not None and step > sd["decay_start"]:
+            raise ValueError(f"Cannot resume a checkpoint mid-decay")
+        if sd["warmup_steps"] != self.warmup_steps:
+            raise ValueError(f"Inconsistent warmup steps with checkpoint ({sd['warmup_steps']})")
+        if not isclose(sd["lr_max"], self.lr_max, rel_tol=1e-6):
+            raise ValueError(f"Inconsistent lr_max with checkpoint ({sd['lr_max']:.6g})")
+        if self.decay_start is not None and step != self.decay_start:
+            raise ValueError(f"Mismatch between decay start ({self.decay_start}) and checkpoint step decay_start ({step})")
+        if step >= self.total_steps:
+            raise ValueError(f"Checkpoint step ({step}) >= total_steps ({self.total_steps})")
+        self.step_count = step
+        self._set_lr(self._lr_at(step))
+
+
+## Now superceded by the WSD scheduler
+class LARS_CosineScheduler:
     """Linear warmup from ~0 to lr_max over warmup_steps, then cosine decay
     to lr_min over the remaining (total_steps - warmup_steps) steps.
 
     Convention: call scheduler.step() AFTER optimizer.step().
     lr_max is the ALREADY-SCALED peak LR (e.g. ~4.8), not the base 0.3.
     """
-
     def __init__(self, optimizer, warmup_steps, total_steps, lr_max, lr_min=0.0):
         assert 0 <= warmup_steps < total_steps, "need 0 <= warmup < total"
         self.optimizer = optimizer
