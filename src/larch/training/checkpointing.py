@@ -31,10 +31,10 @@ def load_checkpoint(encoder, heads, optimizer, scheduler, state_file_name):
     metrics = defaultdict(list, checkpoint.get("metrics", {}))
     return checkpoint['epoch'] + 1, metrics
 
-def save_checkpoint(encoder, heads, optimizer, scheduler, state_file_name, iteration, metrics, args):
+def save_checkpoint(encoder, heads, optimizer, scheduler, state_file_name, epoch, metrics, args):
 
     state_dict = {
-        'epoch': iteration,
+        'epoch': epoch,
         'encoder_state_dict': unwrap(encoder).state_dict(),
         'rng_state': torch.get_rng_state(),
         'cuda_rng_state': torch.cuda.get_rng_state_all(),
