@@ -19,7 +19,7 @@ from larch.models.resnet_encoder import get_encoder, ENCODER_ARG_KEYS
 from larch.models.clustering_head import get_clusthead
 from larch.metrics import argmax_consistency, uniformity, alignment
 from larch.training.logging import log_scalar, log_grad_norm, log_grad_rms, log_grad_over_wgt, log_weight_norm
-from larch.optim.scheduling import build_param_groups, build_onecycle, update_weight_decay
+from larch.optim.scheduling import build_param_groups, build_onecycle
 
 ## Import datasets
 from larch.datasets.base import solo_labelled_collate_fn
@@ -171,7 +171,6 @@ def run_training(rank, local_rank, world_size, args, enc_state):
     ## So we don't constantly ask args
     nepoch = args.nepoch
     weight_decay = args.weight_decay
-    weight_decay_final = args.weight_decay_final
     
     print0("Training with", nepoch, "epochs")
     writer = None
@@ -233,13 +232,6 @@ def run_training(rank, local_rank, world_size, args, enc_state):
             if first_batch_latency is None:
                 first_batch_latency = time.time() - t0
 
-            ## Update weight decay to allow for scheduling
-            this_wd = update_weight_decay(optimizer,
-			                  weight_decay,
-                                          weight_decay_final,
-                                          global_iter,
-                                          nstep_total)
-            
             ## Send to the device, then make the sparse tensors
             cat_bcoords = cat_bcoords.to(device, non_blocking=True)
             cat_bfeats  = cat_bfeats .to(device, non_blocking=True)
@@ -329,7 +321,7 @@ def run_training(rank, local_rank, world_size, args, enc_state):
             
             if scheduler: 
                 log_scalar(writer, metrics, 'train/lr', scheduler.get_last_lr()[0], epoch)
-            log_scalar(writer, metrics, 'train/weight_decay', this_wd, epoch)
+            log_scalar(writer, metrics, 'train/weight_decay', weight_decay, epoch)
 
             ## Build a string to report the outcome
             iter_string = f"Processed {epoch} / {nepoch}; loss = {av_tot_loss:.4f}" + \
@@ -412,7 +404,6 @@ def build_parser():
     parser.add_argument('--batch_size', type=int)
     parser.add_argument('--dropout', type=float)
     parser.add_argument('--weight_decay', type=float)
-    parser.add_argument('--weight_decay_final', type=float)
     parser.add_argument('--norm_encoder', type=int, choices=[0,1])
     
     ## Image size and augmentations

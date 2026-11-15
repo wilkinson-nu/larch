@@ -24,7 +24,6 @@ lars_trust_coeff: 0.001
 lars_momentum: 0.9
 dropout: 0.0
 weight_decay: 1.0e-6
-weight_decay_final: -1.0   # -1 -> no WD schedule
 weight_decay_head: 1
 norm_encoder: 0
 non_lars_lr_scale: 0.03
@@ -50,8 +49,6 @@ enc_stem_deep: 1
 enc_layer1_norm: 1
 enc_final_linear: -1       # -1 -> no extra linear layer
 enc_stem_channels: 64
-
-freeze_gamma: 0
 
 ## ---- optional contrastive clustering head ----
 clust_arch: "none"   # This controls whether there actually is one

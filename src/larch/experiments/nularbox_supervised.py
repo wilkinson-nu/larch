@@ -16,7 +16,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from larch.models.resnet_encoder import get_encoder
 from larch.metrics import uniformity, alignment, basic_geometry_metrics
 from larch.training.logging import log_scalar, log_grad_norm, log_grad_rms, log_grad_over_wgt, log_weight_norm
-from larch.optim.scheduling import get_opt_and_sched, update_weight_decay
+from larch.optim.scheduling import get_opt_and_sched
 
 ## For logging
 from torch.utils.tensorboard import SummaryWriter
@@ -163,7 +163,6 @@ def run_training(rank, local_rank, world_size, args):
     nepoch = args.nepoch
     norm_encoder = bool(args.norm_encoder)
     weight_decay = args.weight_decay
-    weight_decay_final = args.weight_decay_final
 
     print0("Training with", nepoch, "epochs")
     
@@ -240,13 +239,6 @@ def run_training(rank, local_rank, world_size, args):
             if first_batch_latency is None:
                 first_batch_latency = time.time() - t0
                 
-            ## Update weight decay to allow for scheduling
-            this_wd = update_weight_decay(optimizer,
-	        	                  weight_decay,
-                                          weight_decay_final,
-                                          global_iter,
-                                          nstep_total)
-            
             ## Send to the device, then make the sparse tensors
             blabels = select_labels(blabels, SUP_GROUP, device)
             bcoords = bcoords.to(device, non_blocking=True)
@@ -436,7 +428,7 @@ def run_training(rank, local_rank, world_size, args):
                 
             if scheduler: 
                 log_scalar(writer, metrics, 'train/lr', scheduler.get_last_lr()[0], epoch)
-            log_scalar(writer, metrics, 'train/weight_decay', this_wd, epoch)
+            log_scalar(writer, metrics, 'train/weight_decay', weight_decay, epoch)
 
             ## Build a string to report the outcome
             iter_string = f"Processed {epoch} / {nepoch}; loss = {av_tot_loss:.4f} (val loss = {av_val_tot_loss:.4f})"
@@ -533,7 +525,6 @@ def build_parser():
     parser.add_argument('--lars_momentum', type=float)
     parser.add_argument('--dropout', type=float)
     parser.add_argument('--weight_decay', type=float)
-    parser.add_argument('--weight_decay_final', type=float)
     parser.add_argument('--weight_decay_head', type=int, choices=[0,1])
     parser.add_argument('--norm_encoder', type=int, choices=[0,1])
     parser.add_argument('--non_lars_lr_scale', type=float)

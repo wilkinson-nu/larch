@@ -22,7 +22,7 @@ from larch.models.projection_head import get_projhead
 from larch.models.clustering_head import get_clusthead
 from larch.metrics import argmax_consistency, uniformity, alignment, simclr_geometry_metrics
 from larch.training.logging import log_scalar, log_weight_norms, log_lars_diagnostics, log_head_weights
-from larch.optim.scheduling import get_opt_and_sched, update_weight_decay
+from larch.optim.scheduling import get_opt_and_sched
 
 ## Import datasets
 from larch.datasets.base import solo_labelled_collate_fn
@@ -217,7 +217,6 @@ def run_training(rank, local_rank, world_size, args):
     clust_loss_scale = args.clust_loss_scale
     norm_encoder = bool(args.norm_encoder)
     weight_decay = args.weight_decay
-    weight_decay_final = args.weight_decay_final
     
     print0("Training with", nepoch, "epochs")
     writer = None
@@ -305,13 +304,6 @@ def run_training(rank, local_rank, world_size, args):
             if first_batch_latency is None:
                 first_batch_latency = time.time() - t0
 
-            ## Update weight decay to allow for scheduling
-            this_wd = update_weight_decay(optimizer,
-			                  weight_decay,
-                                          weight_decay_final,
-                                          global_iter,
-                                          nstep_total)
-            
             ## Send to the device, then make the sparse tensors
             cat_bcoords = cat_bcoords.to(device, non_blocking=True)
             cat_bfeats  = cat_bfeats .to(device, non_blocking=True)
@@ -581,7 +573,7 @@ def run_training(rank, local_rank, world_size, args):
             
             if scheduler: 
                 log_scalar(writer, metrics, 'train/lr', scheduler.get_last_lr()[0], epoch)
-            log_scalar(writer, metrics, 'train/weight_decay', this_wd, epoch)
+            log_scalar(writer, metrics, 'train/weight_decay', weight_decay, epoch)
 
             ## Build a string to report the outcome
             iter_string = f"Processed {epoch} / {nepoch}; loss = {av_tot_loss:.4f}"
@@ -689,7 +681,6 @@ def build_parser():
     parser.add_argument('--lars_momentum', type=float)
     parser.add_argument('--dropout', type=float)
     parser.add_argument('--weight_decay', type=float)
-    parser.add_argument('--weight_decay_final', type=float)
     parser.add_argument('--weight_decay_head', type=int, choices=[0,1])
     parser.add_argument('--norm_encoder', type=int, choices=[0,1])
     parser.add_argument('--non_lars_lr_scale', type=float)

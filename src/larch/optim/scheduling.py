@@ -23,7 +23,6 @@ def get_opt_and_sched(args, encoder, heads, total_steps, world_size, print_debug
     param_groups = build_param_groups(encoder,
                                       heads,
                                       args.weight_decay,
-                                      args.weight_decay_final,
                                       bool(args.weight_decay_head),
                                       args.non_lars_lr_scale,
                                       args.non_lars_weight_decay,
@@ -84,7 +83,6 @@ def get_opt_and_sched(args, encoder, heads, total_steps, world_size, print_debug
 def build_param_groups(encoder,
                        heads,
                        weight_decay,
-                       weight_decay_final=-1,
                        weight_decay_head=False,
                        non_lars_lr_scale=1.0,
                        non_lars_weight_decay=0.0,
@@ -128,8 +126,7 @@ def build_param_groups(encoder,
                 head_params.append(param)
                 head_names.append(name)
                 
-    ## sort out weight scheduler logic
-    weight_sched = weight_decay_final > 0
+    ## sort out weight logic
     head_weight_decay = weight_decay if weight_decay_head else 0.0
 
     if print_debug:
@@ -159,7 +156,6 @@ def build_param_groups(encoder,
             "params": enc_params,
             "names": enc_names,
             "weight_decay": weight_decay,
-            "weight_sched": weight_sched,
             "lars_exclude": False
         },
         {
@@ -170,7 +166,6 @@ def build_param_groups(encoder,
             "adam_lr": omit_adam_lr,
             "adam_betas": omit_betas,
             "weight_decay": non_lars_weight_decay,
-            "weight_sched": False,
             "lars_exclude": True,
             "lr_scale": non_lars_lr_scale
         },
@@ -179,26 +174,7 @@ def build_param_groups(encoder,
             "params": head_params,
             "names": head_names,
             "weight_decay": head_weight_decay,
-            "weight_sched": weight_sched and weight_decay_head,
             "lars_exclude": False
         },
     ]
 
-def update_weight_decay(optimizer, 
-                        weight_decay, 
-                        weight_decay_final, 
-                        step, 
-                        total_steps):
-
-    if weight_decay_final <= 0: return weight_decay
-
-    # Cosine schedule from weight_decay to weight_decay_final
-    wd = weight_decay_final + 0.5 * (weight_decay - weight_decay_final) * (
-        1 + math.cos(math.pi * step / total_steps)
-    )
-
-    for group in optimizer.param_groups:
-        if group.get("weight_sched", False):
-            group["weight_decay"] = wd
-
-    return wd
