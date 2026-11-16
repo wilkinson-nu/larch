@@ -243,7 +243,7 @@ class ResNetBase(nn.Module):
             h_max = self.pooled_to_dense(self.global_pool_max(x), batch_size)
             h = torch.cat([h_avg, h_max], dim=-1)
         else:
-            h = self.pooled_to_dense(self.global_pool(h), batch_size)
+            h = self.pooled_to_dense(self.global_pool(x), batch_size)
             
         ## Add the bottleneck if requested
         if self.bottleneck is not None:
