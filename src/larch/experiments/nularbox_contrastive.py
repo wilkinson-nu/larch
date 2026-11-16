@@ -345,7 +345,7 @@ def run_training(rank, local_rank, world_size, args):
 
             ## TEMPORARY testing (famous last words)
             cov_key = torch.rand_like(strat_key) if args.cov_strat_random > 0 else None
-            proj_loss, proj_loss_parts = loss_fns["proj"](proj_batch, strat_key, cov_key)
+            proj_loss, proj_loss_parts = loss_fns["proj"](proj_batch, strat_key, cov_key, global_iter)
 
             tot_loss = proj_loss
             losses_tensor["proj"] += proj_loss.detach()
