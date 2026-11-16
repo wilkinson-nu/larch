@@ -88,10 +88,22 @@ class VICRegLossModDistributed(nn.Module):
         self.eig_coeff = eig_coeff
         self.eig_iters = eig_iters
         self.eig_cap = 5
+        self.eig_ramp_start = 0
+        self.eig_ramp_end = 1000
         
         # top-eigenvector estimates, one per view, lazily initialised
         self.v1 = None
         self.v2 = None
+
+    def _eig_coeff_at(self, global_step):
+        if global_step is None:
+            return self.eig_coeff
+        if global_step < self.eig_ramp_start:
+            return 0.0
+        if global_step >= self.eig_ramp_end:
+            return self.eig_coeff
+        frac = (global_step - self.eig_ramp_start) / (self.eig_ramp_end - self.eig_ramp_start)
+        return self.eig_coeff * frac
         
     @staticmethod
     def off_diagonal(x):
@@ -161,7 +173,7 @@ class VICRegLossModDistributed(nn.Module):
     
 
     ## This now requires a key to be given for stratifying the number of events into sub-batches
-    def forward(self, emb_cat, strat_key, cov_key=None):
+    def forward(self, emb_cat, strat_key, cov_key=None, global_step=None):
         assert emb_cat.shape[0] % 2 == 0
 
         batch_size = emb_cat.shape[0] // 2
@@ -186,6 +198,7 @@ class VICRegLossModDistributed(nn.Module):
             self.v2 = self.v1.clone()
         v1_prev = self.v1
 
+        eig_coeff = self._eig_coeff_at(global_step)
         with torch.set_grad_enabled(self.eig_coeff > 0.0):
             r1, self.v1, lam1, v4_1 = self._top_eig(z1_all, self.v1)
             r2, self.v2, lam2, v4_2 = self._top_eig(z2_all, self.v2)
@@ -219,7 +232,7 @@ class VICRegLossModDistributed(nn.Module):
             self.sim_coeff * invariance_loss
             + self.std_coeff * variance_loss
             + self.cov_coeff * covariance_loss
-            + self.eig_coeff * eig_loss
+            + eig_coeff * eig_loss
         )
 
         ## Check whether an additional term would be useful
@@ -254,5 +267,17 @@ class VICRegLossModDistributed(nn.Module):
         width = len(str(self.strat_chunks - 1))
         for i in range(self.strat_chunks):
             logs[f"variance_chunk_{i:0{width}d}"] = var_per_chunk[i].detach()
-        
+            
+        terms = {"inv": self.sim_coeff * invariance_loss,
+                 "var": self.std_coeff * variance_loss,
+                 "cov": self.cov_coeff * covariance_loss,
+                 "eig": eig_coeff * eig_loss}
+            
+        for k, t in terms.items():
+            g, = torch.autograd.grad(t, emb_cat, retain_graph=True, allow_unused=True)
+            sq = torch.zeros((), device=emb_cat.device) if g is None else g.detach().float().pow(2).sum()
+            if dist.is_available() and dist.is_initialized():
+                dist.all_reduce(sq)            # global norm across ranks
+            logs[f"gnorm_{k}"] = sq.sqrt()
+            
         return loss, logs
