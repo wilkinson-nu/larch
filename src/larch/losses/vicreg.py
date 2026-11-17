@@ -51,7 +51,7 @@ class VICRegLossDistributed(nn.Module):
 
         variance_loss = self._std_hinge(z1_all) + self._std_hinge(z2_all)
         covariance_loss = self._cov_penalty(z1_all) + self._cov_penalty(z2_all)
-
+        
         loss = (self.sim_coeff * invariance_loss
                 + self.std_coeff * variance_loss 
                 + self.cov_coeff * covariance_loss)
@@ -121,6 +121,13 @@ class VICRegLossModDistributed(nn.Module):
         cov = xc.T @ xc / max(n - 1, 1)
         return self.off_diagonal(cov).pow(2).sum() / d
 
+    def _corr_penalty(self, x):
+        n, d = x.shape
+        xc = x - x.mean(dim=0)
+        xc = xc / torch.sqrt(xc.pow(2).sum(0) / max(n - 1, 1) + self.eps)  # unit-variance columns
+        corr = xc.T @ xc / max(n - 1, 1)
+        return self.off_diagonal(corr).pow(2).sum() / d
+
     def _init_v(self, d, device):
         g = torch.Generator(device=device).manual_seed(0)   # same on every rank
         v = torch.randn(d, device=device, generator=g)
@@ -170,6 +177,13 @@ class VICRegLossModDistributed(nn.Module):
             for idx in self._chunk_idx(key_all)
         ])
         return cov_per_chunk.mean(), cov_per_chunk
+
+    def _chunked_corr(self, z1_all, z2_all, key_all):
+        corr_per_chunk = torch.stack([
+            self._corr_penalty(z1_all[idx]) + self._corr_penalty(z2_all[idx])
+            for idx in self._chunk_idx(key_all)
+        ])
+        return corr_per_chunk.mean(), corr_per_chunk
     
 
     ## This now requires a key to be given for stratifying the number of events into sub-batches
@@ -190,6 +204,7 @@ class VICRegLossModDistributed(nn.Module):
 
         var_global = self._std_hinge(z1_all) + self._std_hinge(z2_all)
         cov_global = self._cov_penalty(z1_all) + self._cov_penalty(z2_all)
+        corr_global = self._corr_penalty(z1_all) + self._corr_penalty(z2_all)        
 
         ## Top eigenvalue calculation
         d = z1_all.shape[1]
@@ -225,8 +240,8 @@ class VICRegLossModDistributed(nn.Module):
 
         clam = self.cov_strat_lambda
         with torch.set_grad_enabled(clam > 0.0):
-            cov_chunk, cov_per_chunk = self._chunked_cov(z1_all, z2_all, cov_key_all)
-        covariance_loss = (1.0 - clam) * cov_global + clam * cov_chunk if clam > 0.0 else cov_global
+            corr_chunk, corr_per_chunk = self._chunked_corr(z1_all, z2_all, cov_key_all)
+        covariance_loss = (1.0 - clam) * corr_global + clam * corr_chunk if clam > 0.0 else corr_global
         
         loss = (
             self.sim_coeff * invariance_loss
@@ -250,6 +265,7 @@ class VICRegLossModDistributed(nn.Module):
             "variance_gap": (var_chunk - var_global).detach(),
             "variance_excess": excess.detach(),
             "covariance_global": cov_global.detach(),
+            "correlation_global": corr_global.detach(),            
             "covariance": covariance_loss.detach(),
             "covariance_chunked": cov_chunk.detach(),
             "covariance_gap": (cov_chunk - cov_global).detach(),
@@ -257,10 +273,10 @@ class VICRegLossModDistributed(nn.Module):
             "eig_n_above_cap": (ev1 > self.eig_cap).sum().float(),
             "eig_r": 0.5 * (r1 + r2).detach(),                     # 1 = isotropic
             "eig_loss": eig_loss.detach(),
-            "eig_v_cos": torch.dot(self.v1, v1_prev).abs(),        # direction stability between steps
-            "eig_v_l4": 0.5 * (v4_1 + v4_2),                       # ~1/d spread, ~1 axis-aligned
-            "eig_cov_share": ((lam1**2 * (1 - v4_1)) / d).detach() # top direction's contribution to view-1 cov term
-            / self._cov_penalty(z1_all).detach().clamp_min(1e-12),
+            #"eig_v_cos": torch.dot(self.v1, v1_prev).abs(),        # direction stability between steps
+            #"eig_v_l4": 0.5 * (v4_1 + v4_2),                       # ~1/d spread, ~1 axis-aligned
+            #"eig_cov_share": ((lam1**2 * (1 - v4_1)) / d).detach() # top direction's contribution to view-1 cov term
+            #/ self._cov_penalty(z1_all).detach().clamp_min(1e-12),
         }
 
         ## Track what is happening for each chunk
