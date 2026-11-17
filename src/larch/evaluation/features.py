@@ -16,7 +16,7 @@ def extract_features(encoder, loader, device):
         bcoords = bcoords.to(device, non_blocking=True)
         bfeats  = bfeats.to(device,  non_blocking=True)
         batch   = ME.SparseTensor(bfeats, bcoords, device=device)
-        f, _ = model(batch, bs)
+        f = model(batch, bs)
         feats.append(f.float())
 
         if labels is None:
